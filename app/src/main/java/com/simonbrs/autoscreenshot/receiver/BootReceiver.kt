@@ -4,39 +4,48 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.os.Build
 import android.util.Log
+import com.simonbrs.autoscreenshot.MainActivity
+import com.simonbrs.autoscreenshot.service.ScreenshotService
 
 /**
- * Receiver that starts the ScreenshotService when the device boots.
- * Only starts the service if it was running when the device was shut down.
+ * Restores the user's intent to keep screenshot capture active after a reboot.
+ *
+ * Android does not allow a reboot receiver to silently recreate a MediaProjection
+ * token, so we bring the activity forward and let the normal permission flow show
+ * the system screen-capture dialog again.
  */
 class BootReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "BootReceiver"
-        private const val PREFS_NAME = "AutoScreenshotPrefs"
-        private const val KEY_SERVICE_RUNNING = "service_running"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
-            Log.d(TAG, "Boot completed")
-            
-            // Check if service was running before device shutdown
-            val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val wasRunning = prefs.getBoolean(KEY_SERVICE_RUNNING, false)
-            
-            if (wasRunning) {
-                Log.d(TAG, "Service was running before shutdown, launching MainActivity")
-                
-                // We need to start the MainActivity to request the projection permission
-                val launchIntent = Intent(context, Class.forName("com.simonbrs.autoscreenshot.MainActivity"))
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                launchIntent.putExtra("AUTO_START_SERVICE", true) // Signal that we should auto-start
-                context.startActivity(launchIntent)
-            } else {
-                Log.d(TAG, "Service was not running before shutdown")
+        if (intent.action != Intent.ACTION_BOOT_COMPLETED) {
+            return
+        }
+
+        Log.d(TAG, "Boot completed")
+
+        val prefs: SharedPreferences = context.getSharedPreferences(
+            ScreenshotService.PREFS_NAME,
+            Context.MODE_PRIVATE
+        )
+        val shouldRestoreCapture = prefs.getBoolean(
+            ScreenshotService.KEY_SERVICE_ENABLED,
+            prefs.getBoolean(ScreenshotService.KEY_SERVICE_RUNNING, false)
+        )
+
+        if (shouldRestoreCapture) {
+            Log.d(TAG, "Capture was enabled before shutdown, launching permission flow")
+
+            val launchIntent = Intent(context, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra(MainActivity.EXTRA_AUTO_START_SERVICE, true)
             }
+            context.startActivity(launchIntent)
+        } else {
+            Log.d(TAG, "Capture was not enabled before shutdown")
         }
     }
-} 
+}

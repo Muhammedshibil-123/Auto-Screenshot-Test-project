@@ -1,5 +1,6 @@
 package com.simonbrs.autoscreenshot.service
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
@@ -16,7 +17,6 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
-import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -29,7 +29,6 @@ import com.simonbrs.autoscreenshot.R
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.nio.ByteBuffer
 import java.util.Calendar
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -48,12 +47,20 @@ class ScreenshotService : Service() {
         private const val SCREENSHOT_EXTENSION = "webp"
         private val SCREENSHOT_COMPRESS_FORMAT = Bitmap.CompressFormat.WEBP_LOSSY
         const val DEFAULT_INTERVAL_SECONDS = 10L
+        const val PREFS_NAME = "AutoScreenshotPrefs"
+        const val KEY_SERVICE_ENABLED = "service_enabled"
+        const val KEY_SERVICE_RUNNING = "service_running"
+        const val KEY_SCREENSHOT_INTERVAL_SECONDS = "screenshot_interval_seconds"
+        const val ACTION_SERVICE_STATUS_CHANGED = "com.simonbrs.autoscreenshot.SERVICE_STATUS_CHANGED"
+        const val EXTRA_IS_RUNNING = "extra_is_running"
         
         const val EXTRA_RESULT_DATA = "extra_result_data"
         const val EXTRA_INTERVAL_SECONDS = "extra_interval_seconds"
         
         // Flag to ensure only one instance is running
         private val isRunning = AtomicBoolean(false)
+
+        fun isServiceRunning(): Boolean = isRunning.get()
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -66,7 +73,7 @@ class ScreenshotService : Service() {
     private var screenDensity = 0
     private var screenWidth = 0
     private var screenHeight = 0
-    private var isServiceRunning = false
+    private var captureLoopRunning = false
     private var previousScreenshotPath: String? = null
     private var screenshotCount = AtomicInteger(0)
     private var screenshotIntervalSeconds = DEFAULT_INTERVAL_SECONDS
@@ -95,6 +102,7 @@ class ScreenshotService : Service() {
         // Only allow one instance to run
         if (isRunning.getAndSet(true)) {
             Log.d(TAG, "Service already running, skipping start")
+            broadcastRuntimeState(true)
             return START_STICKY
         }
         
@@ -119,23 +127,20 @@ class ScreenshotService : Service() {
                     }
                     
                     if (resultData != null) {
-                        // We must start the service before trying to acquire wake lock
-                        try {
-                            wakeLock?.acquire(10 * 60 * 1000L) // Hold wake lock for 10 minutes
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error acquiring wake lock, but continuing service", e)
-                            // Don't stop service, just continue without wakelock
-                        }
+                        // We must start the foreground service before acquiring a long-lived wakelock.
+                        acquireWakeLock()
                         
                         // Initialize the projection with a persistent virtual display
                         if (!setupMediaProjection(resultData)) {
                             Log.e(TAG, "Failed to set up media projection")
+                            setRuntimeRunning(false)
                             stopSelf()
                             return START_NOT_STICKY
                         }
                         
                         // Mark service as running
-                        isServiceRunning = true
+                        setRuntimeRunning(true)
+                        saveServicePreferences()
                         
                         // Initialize scheduler for precisely timed screenshots
                         scheduler = Executors.newSingleThreadScheduledExecutor()
@@ -147,7 +152,7 @@ class ScreenshotService : Service() {
                             
                             // Schedule the rest at fixed intervals
                             scheduler.scheduleAtFixedRate({
-                                if (isServiceRunning) {
+                                if (captureLoopRunning) {
                                     takeScreenshot()
                                 }
                             }, screenshotIntervalMs, screenshotIntervalMs, TimeUnit.MILLISECONDS)
@@ -156,22 +161,23 @@ class ScreenshotService : Service() {
                         }
                     } else {
                         Log.e(TAG, "No media projection data")
+                        setRuntimeRunning(false)
                         stopSelf()
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error starting foreground service", e)
-                    isRunning.set(false)
+                    setRuntimeRunning(false)
                     stopSelf()
                 }
             } else {
                 Log.d(TAG, "Service started without permission data, stopping")
-                isRunning.set(false)
+                setRuntimeRunning(false)
                 stopSelf()
                 return START_NOT_STICKY // Don't restart if we don't have data
             }
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected error in onStartCommand", e)
-            isRunning.set(false)
+            setRuntimeRunning(false)
             stopSelf()
         }
         
@@ -180,7 +186,7 @@ class ScreenshotService : Service() {
 
     override fun onDestroy() {
         Log.d(TAG, "onDestroy called, shutting down service")
-        isServiceRunning = false
+        setRuntimeRunning(false)
         
         // Shut down executor
         try {
@@ -202,9 +208,6 @@ class ScreenshotService : Service() {
         
         // Clean up projection resources
         tearDownMediaProjection()
-        
-        // Reset running flag
-        isRunning.set(false)
         
         super.onDestroy()
     }
@@ -244,6 +247,44 @@ class ScreenshotService : Service() {
 
     private fun updateNotification() {
         notificationManager?.notify(NOTIFICATION_ID, createNotification())
+    }
+
+    @SuppressLint("WakelockTimeout")
+    private fun acquireWakeLock() {
+        try {
+            if (wakeLock?.isHeld != true) {
+                wakeLock?.acquire()
+                Log.d(TAG, "WakeLock acquired for screenshot service")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error acquiring wake lock, but continuing service", e)
+        }
+    }
+
+    private fun setRuntimeRunning(running: Boolean) {
+        captureLoopRunning = running
+        isRunning.set(running)
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_SERVICE_RUNNING, running)
+            .apply()
+        broadcastRuntimeState(running)
+    }
+
+    private fun saveServicePreferences() {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_SERVICE_ENABLED, true)
+            .putLong(KEY_SCREENSHOT_INTERVAL_SECONDS, screenshotIntervalSeconds)
+            .apply()
+    }
+
+    private fun broadcastRuntimeState(running: Boolean) {
+        val statusIntent = Intent(ACTION_SERVICE_STATUS_CHANGED).apply {
+            setPackage(packageName)
+            putExtra(EXTRA_IS_RUNNING, running)
+        }
+        sendBroadcast(statusIntent)
     }
 
     private fun setupMediaProjection(resultData: Intent): Boolean {
@@ -353,16 +394,6 @@ class ScreenshotService : Service() {
         Log.d(TAG, "Taking screenshot at: ${System.currentTimeMillis()}")
         
         try {
-            // Refresh wake lock to keep service alive
-            try {
-                if (wakeLock?.isHeld == true) {
-                    wakeLock?.release()
-                }
-                wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes
-            } catch (e: Exception) {
-                Log.e(TAG, "Error refreshing wake lock", e)
-            }
-            
             // Get the latest image from the image reader
             var image: Image? = null
             
