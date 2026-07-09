@@ -44,6 +44,9 @@ class ScreenshotService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "ScreenshotServiceChannel"
         private const val MIN_INTERVAL_SECONDS = 1L
+        private const val SCREENSHOT_QUALITY = 65
+        private const val SCREENSHOT_EXTENSION = "webp"
+        private val SCREENSHOT_COMPRESS_FORMAT = Bitmap.CompressFormat.WEBP_LOSSY
         const val DEFAULT_INTERVAL_SECONDS = 10L
         
         const val EXTRA_RESULT_DATA = "extra_result_data"
@@ -432,7 +435,7 @@ class ScreenshotService : Service() {
             
             // Full path for the screenshot file
             val dirPath = "/storage/emulated/0/Screenshot/$year/$month/$day"
-            val filename = "${hour}_${minute}_${second}.png"
+            val filename = "${hour}_${minute}_${second}.$SCREENSHOT_EXTENSION"
             val fullPath = "$dirPath/$filename"
             
             Log.d(TAG, "Attempting to save to: $fullPath")
@@ -461,7 +464,7 @@ class ScreenshotService : Service() {
             
             try {
                 FileOutputStream(file).use { out ->
-                    val success = bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                    val success = bitmap.compress(SCREENSHOT_COMPRESS_FORMAT, SCREENSHOT_QUALITY, out)
                     if (success) {
                         Log.d(TAG, "Screenshot saved to: $fullPath")
                         
