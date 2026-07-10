@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">AutoScreenshot</string>
+    <string name="accessibility_service_summary">Capture periodic screenshots after you enable AutoScreenshot.</string>
+    <string name="accessibility_service_description">AutoScreenshot uses Accessibility screenshot access to save periodic screenshots at your chosen interval.</string>
 </resources>

@@ -1,28 +1,26 @@
 package com.simonbrs.autoscreenshot
 
 import android.Manifest
-import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.os.PowerManager
 import android.provider.Settings
+import android.text.TextUtils
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -52,37 +51,26 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.simonbrs.autoscreenshot.service.ScreenshotService
+import com.simonbrs.autoscreenshot.service.ScreenshotAccessibilityService
 import com.simonbrs.autoscreenshot.ui.theme.AutoScreenshotTheme
 
 class MainActivity : ComponentActivity() {
-    companion object {
-        const val EXTRA_AUTO_START_SERVICE = "AUTO_START_SERVICE"
-
-        private const val LEGACY_KEY_SERVICE_RUNNING = "service_running"
-        private const val KEY_ONBOARDING_SKIPPED = "onboarding_skipped"
-        private const val KEY_BATTERY_SETUP_ACKNOWLEDGED = "battery_setup_acknowledged"
-    }
-
-    private lateinit var mediaProjectionManager: MediaProjectionManager
     private lateinit var permissionLauncher: ActivityResultLauncher<Array<String>>
-    private lateinit var mediaProjectionLauncher: ActivityResultLauncher<Intent>
     private lateinit var settingsLauncher: ActivityResultLauncher<Intent>
     private lateinit var prefs: SharedPreferences
 
-    private var isServiceRunning by mutableStateOf(false)
-    private var permissionUiState by mutableStateOf(PermissionUiState())
-    private var showOnboarding by mutableStateOf(true)
-    private var pendingIntervalSeconds = ScreenshotService.DEFAULT_INTERVAL_SECONDS
-    private var pendingCaptureAfterPermissions = false
-    private var shouldAutoStart = false
+    private var isCaptureRunning by mutableStateOf(false)
+    private var isAccessibilityEnabled by mutableStateOf(false)
+    private var hasStorageAccess by mutableStateOf(false)
+    private var savedIntervalSeconds by mutableStateOf(ScreenshotAccessibilityService.DEFAULT_INTERVAL_SECONDS)
 
     private val serviceStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == ScreenshotService.ACTION_SERVICE_STATUS_CHANGED) {
-                val running = intent.getBooleanExtra(ScreenshotService.EXTRA_IS_RUNNING, false)
-                isServiceRunning = running
-                saveRuntimeServiceState(running)
+            if (intent?.action == ScreenshotAccessibilityService.ACTION_SERVICE_STATUS_CHANGED) {
+                isCaptureRunning = intent.getBooleanExtra(
+                    ScreenshotAccessibilityService.EXTRA_IS_RUNNING,
+                    false
+                )
             }
         }
     }
@@ -91,74 +79,26 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        prefs = getSharedPreferences(ScreenshotService.PREFS_NAME, MODE_PRIVATE)
-        migrateLegacyServicePreference()
-
-        isServiceRunning = ScreenshotService.isServiceRunning()
-        pendingIntervalSeconds = prefs.getLong(
-            ScreenshotService.KEY_SCREENSHOT_INTERVAL_SECONDS,
-            ScreenshotService.DEFAULT_INTERVAL_SECONDS
+        prefs = getSharedPreferences(ScreenshotAccessibilityService.PREFS_NAME, MODE_PRIVATE)
+        savedIntervalSeconds = prefs.getLong(
+            ScreenshotAccessibilityService.KEY_SCREENSHOT_INTERVAL_SECONDS,
+            ScreenshotAccessibilityService.DEFAULT_INTERVAL_SECONDS
         )
-        shouldAutoStart = intent?.getBooleanExtra(EXTRA_AUTO_START_SERVICE, false) ?: false
-
-        mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
         permissionLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
-        ) { permissions ->
-            val allGranted = permissions.values.all { it }
-            syncPermissionState()
-
-            if (allGranted) {
-                continuePendingCaptureIfReady(requestMissingPermissions = true)
-            } else {
-                pendingCaptureAfterPermissions = false
-                Toast.makeText(this, "Required permissions were not granted", Toast.LENGTH_SHORT).show()
-            }
+        ) {
+            syncState()
         }
 
         settingsLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) {
-            syncPermissionState()
-            continuePendingCaptureIfReady(requestMissingPermissions = false)
+            syncState()
+            ScreenshotAccessibilityService.refreshRunningService()
         }
 
-        mediaProjectionLauncher = registerForActivityResult(
-            ActivityResultContracts.StartActivityForResult()
-        ) { result ->
-            if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-                val serviceIntent = Intent(this, ScreenshotService::class.java).apply {
-                    putExtra(ScreenshotService.EXTRA_RESULT_DATA, result.data)
-                    putExtra(ScreenshotService.EXTRA_INTERVAL_SECONDS, pendingIntervalSeconds)
-                }
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(serviceIntent)
-                } else {
-                    startService(serviceIntent)
-                }
-
-                isServiceRunning = true
-                saveTrackingEnabled(true)
-                saveRuntimeServiceState(true)
-
-                Toast.makeText(
-                    this,
-                    "Screenshot service started - saving to /storage/emulated/0/Screenshot/YYYY/MM/DD/",
-                    Toast.LENGTH_LONG
-                ).show()
-            } else {
-                saveTrackingEnabled(false)
-                saveRuntimeServiceState(false)
-                Toast.makeText(this, "Permission denied, cannot take screenshots", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        syncPermissionState()
-        showOnboarding = !prefs.getBoolean(KEY_ONBOARDING_SKIPPED, false) &&
-            !permissionUiState.allRecommendedComplete &&
-            !isServiceRunning
+        syncState()
 
         setContent {
             AutoScreenshotTheme {
@@ -166,45 +106,30 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    if (showOnboarding && !isServiceRunning) {
-                        PermissionOnboardingScreen(
-                            permissionUiState = permissionUiState,
-                            onRequestStorage = { requestStoragePermission() },
-                            onRequestNotifications = { requestNotificationPermission() },
-                            onRequestBattery = { requestIgnoreBatteryOptimizations() },
-                            onContinue = { skipOnboarding() },
-                            onStartAnyway = {
-                                skipOnboarding()
-                                startScreenshotCapture(pendingIntervalSeconds)
-                            },
-                            onRefresh = {
-                                syncPermissionState()
-                                syncServiceRunningState()
-                            }
-                        )
-                    } else {
-                        ScreenshotScreen(
-                            isServiceRunning = isServiceRunning,
-                            initialIntervalSeconds = pendingIntervalSeconds,
-                            onStartService = { intervalSeconds ->
-                                startScreenshotCapture(intervalSeconds)
-                            },
-                            onStopService = {
-                                stopScreenshotService()
-                            },
-                            onOpenSetup = {
-                                prefs.edit().putBoolean(KEY_ONBOARDING_SKIPPED, false).apply()
-                                syncPermissionState()
-                                showOnboarding = true
-                            }
-                        )
-                    }
+                    AccessibilityScreenshotScreen(
+                        isCaptureRunning = isCaptureRunning,
+                        isAccessibilityEnabled = isAccessibilityEnabled,
+                        hasStorageAccess = hasStorageAccess,
+                        initialIntervalSeconds = savedIntervalSeconds,
+                        onStartCapture = { intervalSeconds ->
+                            startCapture(intervalSeconds)
+                        },
+                        onStopCapture = {
+                            stopCapture()
+                        },
+                        onOpenAccessibilitySettings = {
+                            openAccessibilitySettings()
+                        },
+                        onRequestStorage = {
+                            requestStoragePermission()
+                        },
+                        onRefresh = {
+                            syncState()
+                            ScreenshotAccessibilityService.refreshRunningService()
+                        }
+                    )
                 }
             }
-        }
-
-        if (shouldAutoStart) {
-            startScreenshotCapture(pendingIntervalSeconds)
         }
     }
 
@@ -213,17 +138,16 @@ class MainActivity : ComponentActivity() {
         ContextCompat.registerReceiver(
             this,
             serviceStatusReceiver,
-            IntentFilter(ScreenshotService.ACTION_SERVICE_STATUS_CHANGED),
+            IntentFilter(ScreenshotAccessibilityService.ACTION_SERVICE_STATUS_CHANGED),
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
-        syncServiceRunningState()
+        syncState()
     }
 
     override fun onResume() {
         super.onResume()
-        syncPermissionState()
-        syncServiceRunningState()
-        continuePendingCaptureIfReady(requestMissingPermissions = false)
+        syncState()
+        ScreenshotAccessibilityService.refreshRunningService()
     }
 
     override fun onStop() {
@@ -235,127 +159,91 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-
-        if (intent.getBooleanExtra(EXTRA_AUTO_START_SERVICE, false)) {
-            shouldAutoStart = true
-            startScreenshotCapture(pendingIntervalSeconds)
-        }
-    }
-
-    private fun migrateLegacyServicePreference() {
-        if (!prefs.contains(ScreenshotService.KEY_SERVICE_ENABLED)) {
-            val legacyRunning = prefs.getBoolean(LEGACY_KEY_SERVICE_RUNNING, false)
-            prefs.edit()
-                .putBoolean(ScreenshotService.KEY_SERVICE_ENABLED, legacyRunning)
-                .apply()
-        }
-    }
-
-    private fun saveTrackingEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(ScreenshotService.KEY_SERVICE_ENABLED, enabled).apply()
-    }
-
-    private fun saveRuntimeServiceState(running: Boolean) {
-        prefs.edit().putBoolean(ScreenshotService.KEY_SERVICE_RUNNING, running).apply()
-    }
-
-    private fun saveScreenshotInterval(intervalSeconds: Long) {
-        prefs.edit()
-            .putLong(ScreenshotService.KEY_SCREENSHOT_INTERVAL_SECONDS, intervalSeconds)
-            .apply()
-    }
-
-    private fun startScreenshotCapture(intervalSeconds: Long) {
-        pendingIntervalSeconds = intervalSeconds.coerceAtLeast(1L)
-        saveScreenshotInterval(pendingIntervalSeconds)
-        pendingCaptureAfterPermissions = true
-        continuePendingCaptureIfReady(requestMissingPermissions = true)
-    }
-
-    private fun continuePendingCaptureIfReady(requestMissingPermissions: Boolean) {
-        if (!pendingCaptureAfterPermissions && !shouldAutoStart) {
-            return
-        }
-
-        val ready = if (requestMissingPermissions) {
-            checkAndRequestPermissions()
-        } else {
-            hasRequiredPermissions()
-        }
-
-        if (ready) {
-            pendingCaptureAfterPermissions = false
-            shouldAutoStart = false
-            requestMediaProjection()
-        }
-    }
-
-    private fun stopScreenshotService() {
-        pendingCaptureAfterPermissions = false
-        shouldAutoStart = false
-        saveTrackingEnabled(false)
-        saveRuntimeServiceState(false)
-        stopService(Intent(this, ScreenshotService::class.java))
-        isServiceRunning = false
-        Toast.makeText(this, "Screenshot service stopped", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun syncServiceRunningState() {
-        val running = ScreenshotService.isServiceRunning()
-        isServiceRunning = running
-        saveRuntimeServiceState(running)
-    }
-
-    private fun syncPermissionState() {
-        val batterySetupAcknowledged = prefs.getBoolean(KEY_BATTERY_SETUP_ACKNOWLEDGED, false)
-        permissionUiState = PermissionUiState(
-            storageGranted = hasStorageAccess(),
-            notificationsGranted = hasNotificationPermission(),
-            batteryUnrestricted = isIgnoringBatteryOptimizations() || batterySetupAcknowledged
+    private fun syncState() {
+        hasStorageAccess = hasStorageAccess()
+        isAccessibilityEnabled = isAccessibilityServiceEnabled()
+        savedIntervalSeconds = prefs.getLong(
+            ScreenshotAccessibilityService.KEY_SCREENSHOT_INTERVAL_SECONDS,
+            ScreenshotAccessibilityService.DEFAULT_INTERVAL_SECONDS
         )
+        isCaptureRunning = isAccessibilityEnabled &&
+            prefs.getBoolean(ScreenshotAccessibilityService.KEY_SERVICE_RUNNING, false)
     }
 
-    private fun hasRequiredPermissions(): Boolean {
-        syncPermissionState()
-        return permissionUiState.canAttemptCapture
-    }
+    private fun startCapture(intervalSeconds: Long) {
+        val safeInterval = intervalSeconds.coerceAtLeast(1L)
+        savedIntervalSeconds = safeInterval
 
-    private fun checkAndRequestPermissions(): Boolean {
-        syncPermissionState()
+        prefs.edit()
+            .putLong(ScreenshotAccessibilityService.KEY_SCREENSHOT_INTERVAL_SECONDS, safeInterval)
+            .putBoolean(ScreenshotAccessibilityService.KEY_SERVICE_ENABLED, true)
+            .apply()
 
         if (!hasStorageAccess()) {
             requestStoragePermission()
+            Toast.makeText(this, "Allow storage access before starting capture", Toast.LENGTH_SHORT).show()
+            syncState()
+            return
+        }
+
+        if (!isAccessibilityServiceEnabled()) {
+            openAccessibilitySettings()
+            Toast.makeText(this, "Turn on AutoScreenshot in Accessibility settings", Toast.LENGTH_LONG).show()
+            syncState()
+            return
+        }
+
+        ScreenshotAccessibilityService.refreshRunningService()
+        syncState()
+        Toast.makeText(this, "Screenshot capture enabled", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun stopCapture() {
+        prefs.edit()
+            .putBoolean(ScreenshotAccessibilityService.KEY_SERVICE_ENABLED, false)
+            .putBoolean(ScreenshotAccessibilityService.KEY_SERVICE_RUNNING, false)
+            .apply()
+
+        ScreenshotAccessibilityService.refreshRunningService()
+        syncState()
+        Toast.makeText(this, "Screenshot capture stopped", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val accessibilityEnabled = Settings.Secure.getInt(
+            contentResolver,
+            Settings.Secure.ACCESSIBILITY_ENABLED,
+            0
+        ) == 1
+
+        if (!accessibilityEnabled) {
             return false
         }
 
-        return true
-    }
+        val expectedService = ComponentName(
+            this,
+            ScreenshotAccessibilityService::class.java
+        ).flattenToString()
 
-    private fun requestMediaProjection() {
-        if (!hasStorageAccess()) {
-            requestStoragePermission()
-            return
+        val enabledServices = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+
+        val splitter = TextUtils.SimpleStringSplitter(':')
+        splitter.setString(enabledServices)
+
+        for (service in splitter) {
+            if (service.equals(expectedService, ignoreCase = true)) {
+                return true
+            }
         }
 
-        val intent = mediaProjectionManager.createScreenCaptureIntent()
-        mediaProjectionLauncher.launch(intent)
+        return false
     }
 
-    private fun hasNotificationPermission(): Boolean {
-        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
-    }
-
-    private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission()) {
-            permissionLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
-        } else {
-            syncPermissionState()
-        }
+    private fun openAccessibilitySettings() {
+        settingsLauncher.launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 
     private fun hasStorageAccess(): Boolean {
@@ -383,80 +271,35 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestManageExternalStoragePermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                    data = Uri.parse("package:$packageName")
-                }
-                settingsLauncher.launch(intent)
-                Toast.makeText(this, "Please grant storage permission", Toast.LENGTH_SHORT).show()
-            } catch (_: ActivityNotFoundException) {
-                settingsLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-            }
-        }
-    }
-
-    private fun isIgnoringBatteryOptimizations(): Boolean {
-        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
-        return powerManager.isIgnoringBatteryOptimizations(packageName)
-    }
-
-    private fun requestIgnoreBatteryOptimizations() {
-        if (isIgnoringBatteryOptimizations()) {
-            syncPermissionState()
-            return
-        }
-
-        prefs.edit().putBoolean(KEY_BATTERY_SETUP_ACKNOWLEDGED, true).apply()
-        syncPermissionState()
-
         try {
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
                 data = Uri.parse("package:$packageName")
             }
             settingsLauncher.launch(intent)
         } catch (_: ActivityNotFoundException) {
-            settingsLauncher.launch(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            settingsLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
         }
     }
-
-    private fun requestOverlayPermission() {
-        Toast.makeText(this, "Please grant overlay permission for service stability", Toast.LENGTH_SHORT).show()
-        val intent = Intent(
-            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:$packageName")
-        )
-        settingsLauncher.launch(intent)
-    }
-
-    private fun skipOnboarding() {
-        prefs.edit().putBoolean(KEY_ONBOARDING_SKIPPED, true).apply()
-        showOnboarding = false
-    }
-}
-
-data class PermissionUiState(
-    val storageGranted: Boolean = false,
-    val notificationsGranted: Boolean = false,
-    val batteryUnrestricted: Boolean = false
-) {
-    val canAttemptCapture: Boolean
-        get() = storageGranted
-
-    val allRecommendedComplete: Boolean
-        get() = storageGranted && notificationsGranted && batteryUnrestricted
 }
 
 @Composable
-fun PermissionOnboardingScreen(
-    permissionUiState: PermissionUiState,
+fun AccessibilityScreenshotScreen(
+    isCaptureRunning: Boolean,
+    isAccessibilityEnabled: Boolean,
+    hasStorageAccess: Boolean,
+    initialIntervalSeconds: Long,
+    onStartCapture: (Long) -> Unit,
+    onStopCapture: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
     onRequestStorage: () -> Unit,
-    onRequestNotifications: () -> Unit,
-    onRequestBattery: () -> Unit,
-    onContinue: () -> Unit,
-    onStartAnyway: () -> Unit,
     onRefresh: () -> Unit
 ) {
+    var intervalText by rememberSaveable(initialIntervalSeconds) {
+        mutableStateOf(initialIntervalSeconds.toString())
+    }
+    val intervalSeconds = intervalText.trim().toLongOrNull()
+    val isIntervalValid = intervalSeconds != null && intervalSeconds >= 1L
+
     Scaffold { innerPadding ->
         Column(
             modifier = Modifier
@@ -465,160 +308,11 @@ fun PermissionOnboardingScreen(
                 .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "Finish Setup",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    text = "Allow the essentials so screenshots can be saved reliably while the app runs in the background.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            PermissionStep(
-                title = "Storage access",
-                description = "Saves screenshot files into dated folders so you can inspect them later.",
-                granted = permissionUiState.storageGranted,
-                required = true,
-                actionText = "Allow storage",
-                onAction = onRequestStorage
-            )
-
-            PermissionStep(
-                title = "Notifications",
-                description = "Shows the required foreground service notification while capture is active.",
-                granted = permissionUiState.notificationsGranted,
-                required = false,
-                actionText = "Allow notifications",
-                onAction = onRequestNotifications
-            )
-
-            PermissionStep(
-                title = "Battery background access",
-                description = "Opens Android battery settings. Keep background usage allowed, or choose Unrestricted if your phone shows that option.",
-                granted = permissionUiState.batteryUnrestricted,
-                required = false,
-                actionText = "Open battery settings",
-                onAction = onRequestBattery
-            )
-
-            Button(
-                onClick = onStartAnyway,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp)
-            ) {
-                Text("Start anyway")
-            }
-
-            OutlinedButton(
-                onClick = onContinue,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Skip setup")
-            }
-
-            OutlinedButton(
-                onClick = onRefresh,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Refresh status")
-            }
-        }
-    }
-}
-
-@Composable
-fun PermissionStep(
-    title: String,
-    description: String,
-    granted: Boolean,
-    required: Boolean,
-    actionText: String,
-    onAction: () -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.large,
-        color = if (granted) {
-            MaterialTheme.colorScheme.primaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant
-        },
-        contentColor = if (granted) {
-            MaterialTheme.colorScheme.onPrimaryContainer
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        }
-    ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = when {
-                        granted -> "Done"
-                        required -> "Required"
-                        else -> "Recommended"
-                    },
-                    style = MaterialTheme.typography.labelLarge
-                )
-            }
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodyMedium
-            )
-            if (!granted) {
-                Button(
-                    onClick = onAction,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(actionText)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ScreenshotScreen(
-    isServiceRunning: Boolean,
-    initialIntervalSeconds: Long,
-    onStartService: (Long) -> Unit,
-    onStopService: () -> Unit,
-    onOpenSetup: () -> Unit
-) {
-    var intervalText by rememberSaveable { mutableStateOf(initialIntervalSeconds.toString()) }
-    val intervalSeconds = intervalText.trim().toLongOrNull()
-    val isIntervalValid = intervalSeconds != null && intervalSeconds >= 1L
-    val activeInterval = intervalSeconds ?: initialIntervalSeconds
-
-    Scaffold { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .safeDrawingPadding()
-                .padding(horizontal = 24.dp, vertical = 28.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(24.dp)
+                verticalArrangement = Arrangement.spacedBy(22.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
@@ -627,51 +321,41 @@ fun ScreenshotScreen(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = if (isServiceRunning) {
-                            "Capturing every $activeInterval seconds"
+                        text = if (isCaptureRunning) {
+                            "Capturing every ${intervalSeconds ?: initialIntervalSeconds} seconds"
                         } else {
-                            "Set an interval and start capture"
+                            "Enable Accessibility once, then capture runs from the saved interval."
                         },
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
-                    color = if (isServiceRunning) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
-                    },
-                    contentColor = if (isServiceRunning) {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                ) {
-                    Row(
+                StatusPanel(
+                    isCaptureRunning = isCaptureRunning,
+                    isAccessibilityEnabled = isAccessibilityEnabled,
+                    hasStorageAccess = hasStorageAccess
+                )
+
+                if (!isAccessibilityEnabled) {
+                    Button(
+                        onClick = onOpenAccessibilitySettings,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(20.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .height(56.dp)
                     ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                text = "Status",
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                            Text(
-                                text = if (isServiceRunning) "Running" else "Idle",
-                                style = MaterialTheme.typography.titleLarge
-                            )
-                        }
-                        Text(
-                            text = if (isServiceRunning) "Active" else "Ready",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Text("Open Accessibility Settings")
+                    }
+                }
+
+                if (!hasStorageAccess) {
+                    OutlinedButton(
+                        onClick = onRequestStorage,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                    ) {
+                        Text("Allow Storage Access")
                     }
                 }
 
@@ -681,7 +365,7 @@ fun ScreenshotScreen(
                         intervalText = newValue.filter { it.isDigit() }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = !isServiceRunning,
+                    enabled = !isCaptureRunning,
                     singleLine = true,
                     label = {
                         Text("Interval seconds")
@@ -704,27 +388,25 @@ fun ScreenshotScreen(
             ) {
                 Button(
                     onClick = {
-                        if (isServiceRunning) {
-                            onStopService()
+                        if (isCaptureRunning) {
+                            onStopCapture()
                         } else if (intervalSeconds != null) {
-                            onStartService(intervalSeconds)
+                            onStartCapture(intervalSeconds)
                         }
                     },
-                    enabled = isServiceRunning || isIntervalValid,
+                    enabled = isCaptureRunning || isIntervalValid,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp)
                 ) {
-                    Text(if (isServiceRunning) "Stop" else "Start")
+                    Text(if (isCaptureRunning) "Stop Capture" else "Start Capture")
                 }
 
-                if (!isServiceRunning) {
-                    OutlinedButton(
-                        onClick = onOpenSetup,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Setup permissions")
-                    }
+                OutlinedButton(
+                    onClick = onRefresh,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Refresh Status")
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -733,36 +415,83 @@ fun ScreenshotScreen(
     }
 }
 
-@Preview(showBackground = true)
 @Composable
-fun PermissionOnboardingScreenPreview() {
-    AutoScreenshotTheme {
-        PermissionOnboardingScreen(
-            permissionUiState = PermissionUiState(
-                storageGranted = true,
-                notificationsGranted = false,
-                batteryUnrestricted = false
-            ),
-            onRequestStorage = {},
-            onRequestNotifications = {},
-            onRequestBattery = {},
-            onContinue = {},
-            onStartAnyway = {},
-            onRefresh = {}
+private fun StatusPanel(
+    isCaptureRunning: Boolean,
+    isAccessibilityEnabled: Boolean,
+    hasStorageAccess: Boolean
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = if (isCaptureRunning) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+        contentColor = if (isCaptureRunning) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Capture", style = MaterialTheme.typography.titleMedium)
+                Text(if (isCaptureRunning) "Running" else "Stopped")
+            }
+
+            SetupLine(
+                label = "Accessibility service",
+                value = if (isAccessibilityEnabled) "On" else "Off"
+            )
+            SetupLine(
+                label = "Storage access",
+                value = if (hasStorageAccess) "Allowed" else "Required"
+            )
+        }
+    }
+}
+
+@Composable
+private fun SetupLine(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelLarge
         )
     }
 }
 
 @Preview(showBackground = true)
 @Composable
-fun ScreenshotScreenPreview() {
+fun AccessibilityScreenshotScreenPreview() {
     AutoScreenshotTheme {
-        ScreenshotScreen(
-            isServiceRunning = false,
-            initialIntervalSeconds = ScreenshotService.DEFAULT_INTERVAL_SECONDS,
-            onStartService = {},
-            onStopService = {},
-            onOpenSetup = {}
+        AccessibilityScreenshotScreen(
+            isCaptureRunning = false,
+            isAccessibilityEnabled = false,
+            hasStorageAccess = true,
+            initialIntervalSeconds = ScreenshotAccessibilityService.DEFAULT_INTERVAL_SECONDS,
+            onStartCapture = {},
+            onStopCapture = {},
+            onOpenAccessibilitySettings = {},
+            onRequestStorage = {},
+            onRefresh = {}
         )
     }
 }
