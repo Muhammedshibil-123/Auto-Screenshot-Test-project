@@ -1,12 +1,18 @@
 package com.simonbrs.autoscreenshot.service
 
 import android.accessibilityservice.AccessibilityService
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
+import com.simonbrs.autoscreenshot.data.AppSessionStore
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -59,6 +65,23 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     private var captureLoopRunning = false
     private var previousScreenshotPath: String? = null
     private var lastAutoDeleteCleanupMillis = 0L
+    @Volatile
+    private var currentPackageName: String? = null
+
+    @Volatile
+    private var currentAppName: String? = null
+
+    private val appSessionStore by lazy { AppSessionStore(applicationContext) }
+    private var isScreenReceiverRegistered = false
+
+    private val screenStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF,
+                Intent.ACTION_SHUTDOWN -> closeCurrentSession(System.currentTimeMillis())
+            }
+        }
+    }
 
     private val captureRunnable = object : Runnable {
         override fun run() {
@@ -80,11 +103,26 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         Log.d(TAG, "Accessibility service connected")
         activeService = this
+        restoreActiveSession()
+        registerScreenStateReceiver()
         syncCaptureLoopFromPreferences()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Screenshots are driven by the timer loop, not by UI events.
+        if (event == null || !isForegroundChangeEvent(event)) {
+            return
+        }
+
+        val foregroundPackage = event.packageName
+            ?.toString()
+            ?.takeIf { it.isNotBlank() }
+            ?: return
+
+        if (shouldIgnoreForegroundPackage(foregroundPackage) || foregroundPackage == currentPackageName) {
+            return
+        }
+
+        recordForegroundPackageChange(foregroundPackage, event.eventTime.takeIf { it > 0L } ?: System.currentTimeMillis())
     }
 
     override fun onInterrupt() {
@@ -94,6 +132,8 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         Log.d(TAG, "Accessibility service destroyed")
         stopCaptureLoop()
+        closeCurrentSession(System.currentTimeMillis())
+        unregisterScreenStateReceiver()
         activeService = null
         isRunning.set(false)
         captureExecutor.shutdownNow()
@@ -228,7 +268,15 @@ class ScreenshotAccessibilityService : AccessibilityService() {
             val second = String.format(Locale.US, "%02d", calendar.get(Calendar.SECOND))
 
             val dirPath = "$SCREENSHOT_ROOT_PATH/$year/$month/$day"
-            val filename = "${hour}_${minute}_${second}.$SCREENSHOT_EXTENSION"
+            val appPrefix = currentAppName
+                ?: appSessionStore.readActiveSession()?.appName
+                ?: currentPackageName
+                ?: "unknown_app"
+            val filenamePrefix = appPrefix
+                .let { sanitizeAppNameForFilename(it) }
+                .takeIf { it.isNotBlank() }
+                ?: "unknown_app"
+            val filename = "${filenamePrefix}_${hour}_${minute}_${second}.$SCREENSHOT_EXTENSION"
             val fullPath = "$dirPath/$filename"
 
             val dirFile = File(dirPath)
@@ -277,6 +325,80 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected error while saving screenshot", e)
         }
+    }
+
+    private fun recordForegroundPackageChange(packageName: String, openedAt: Long) {
+        val appName = appNameForPackage(packageName)
+        appSessionStore.startSession(
+            packageName = packageName,
+            appName = appName,
+            openedAt = openedAt
+        )
+        currentPackageName = packageName
+        currentAppName = appName
+        Log.d(TAG, "Foreground app changed: $appName ($packageName)")
+    }
+
+    private fun closeCurrentSession(closedAt: Long) {
+        appSessionStore.closeActiveSession(closedAt)
+        currentPackageName = null
+        currentAppName = null
+    }
+
+    private fun restoreActiveSession() {
+        val activeSession = appSessionStore.readActiveSession() ?: return
+        currentPackageName = activeSession.packageName
+        currentAppName = activeSession.appName
+    }
+
+    private fun registerScreenStateReceiver() {
+        if (isScreenReceiverRegistered) {
+            return
+        }
+
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SHUTDOWN)
+        }
+        registerReceiver(screenStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        isScreenReceiverRegistered = true
+    }
+
+    private fun unregisterScreenStateReceiver() {
+        if (!isScreenReceiverRegistered) {
+            return
+        }
+
+        runCatching { unregisterReceiver(screenStateReceiver) }
+        isScreenReceiverRegistered = false
+    }
+
+    private fun isForegroundChangeEvent(event: AccessibilityEvent): Boolean {
+        return event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+    }
+
+    private fun shouldIgnoreForegroundPackage(packageName: String): Boolean {
+        return packageName == this.packageName ||
+            packageName == "android" ||
+            packageName == "com.android.systemui"
+    }
+
+    private fun appNameForPackage(packageName: String): String {
+        return try {
+            val applicationInfo = packageManager.getApplicationInfo(packageName, 0)
+            packageManager.getApplicationLabel(applicationInfo).toString().ifBlank { packageName }
+        } catch (e: PackageManager.NameNotFoundException) {
+            packageName
+        }
+    }
+
+    private fun sanitizeAppNameForFilename(appName: String): String {
+        return appName
+            .trim()
+            .replace(Regex("""\s+"""), "_")
+            .replace(Regex("""[^A-Za-z0-9._-]"""), "_")
+            .trim('_')
     }
 
     private fun areFilesIdentical(file1: File, file2: File): Boolean {
