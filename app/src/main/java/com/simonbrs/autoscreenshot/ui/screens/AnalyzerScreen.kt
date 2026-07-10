@@ -7,10 +7,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
 import android.os.Process
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,21 +36,33 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -58,9 +73,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-
 import androidx.compose.ui.graphics.Brush
-
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -69,6 +83,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -78,8 +94,10 @@ import com.simonbrs.autoscreenshot.ui.theme.VibrantCyan
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
@@ -161,20 +179,37 @@ fun AnalyzerScreen(
         viewModel.refresh(context)
     }
 
+    var activeAppForScreenshots by remember { mutableStateOf<Pair<AnalyzerAppUsage, LocalDate>?>(null) }
+
     Box(modifier = modifier.fillMaxSize()) {
-        when {
-            !state.hasUsageAccess && !state.isLoading -> UsageAccessPrompt(
-                onOpenSettings = {
-                    usageAccessLauncher.launch(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-                }
+        val appScreenshots = activeAppForScreenshots
+        if (appScreenshots != null) {
+            BackHandler {
+                activeAppForScreenshots = null
+            }
+            AppScreenshotsDetail(
+                app = appScreenshots.first,
+                date = appScreenshots.second,
+                onBack = { activeAppForScreenshots = null }
             )
-            state.isLoading -> LoadingAnalyzer()
-            else -> AnalyzerContent(
-                state = state,
-                onPrevWeek = { viewModel.navigateWeek(context, -1) },
-                onNextWeek = { viewModel.navigateWeek(context, 1) },
-                onSelectDay = { viewModel.selectDay(it) }
-            )
+        } else {
+            when {
+                !state.hasUsageAccess && !state.isLoading -> UsageAccessPrompt(
+                    onOpenSettings = {
+                        usageAccessLauncher.launch(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                    }
+                )
+                state.isLoading -> LoadingAnalyzer()
+                else -> AnalyzerContent(
+                    state = state,
+                    onPrevWeek = { viewModel.navigateWeek(context, -1) },
+                    onNextWeek = { viewModel.navigateWeek(context, 1) },
+                    onSelectDay = { viewModel.selectDay(it) },
+                    onAppClick = { app, date ->
+                        activeAppForScreenshots = Pair(app, date)
+                    }
+                )
+            }
         }
     }
 }
@@ -186,7 +221,8 @@ private fun AnalyzerContent(
     state: AnalyzerUiState,
     onPrevWeek: () -> Unit,
     onNextWeek: () -> Unit,
-    onSelectDay: (Int) -> Unit
+    onSelectDay: (Int) -> Unit,
+    onAppClick: (AnalyzerAppUsage, LocalDate) -> Unit
 ) {
     val today = LocalDate.now()
     val todayDayIndex = (today.dayOfWeek.value % 7) // Sun=0..Sat=6
@@ -248,7 +284,14 @@ private fun AnalyzerContent(
         }
 
         items(apps, key = { it.packageName }) { app ->
-            AppUsageRow(app = app)
+            AppUsageRow(
+                app = app,
+                onClick = {
+                    selectedDay?.date?.let { date ->
+                        onAppClick(app, date)
+                    }
+                }
+            )
         }
 
         // Bottom spacer
@@ -515,42 +558,56 @@ private fun BarChart(
     }
 }
 
+// ── App Icon Composable ──────────────────────────────────────
+
+@Composable
+private fun AppIcon(
+    icon: Bitmap?,
+    appName: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .size(44.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surface),
+        contentAlignment = Alignment.Center
+    ) {
+        if (icon == null) {
+            Icon(
+                imageVector = Icons.Default.PieChart,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                modifier = Modifier.size(24.dp)
+            )
+        } else {
+            Image(
+                bitmap = icon.asImageBitmap(),
+                contentDescription = appName,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(4.dp)
+            )
+        }
+    }
+}
+
 // ── App usage row ────────────────────────────────────────────
 
 @Composable
-private fun AppUsageRow(app: AnalyzerAppUsage) {
+private fun AppUsageRow(
+    app: AnalyzerAppUsage,
+    onClick: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // App icon
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.surface),
-            contentAlignment = Alignment.Center
-        ) {
-            if (app.icon == null) {
-                Icon(
-                    imageVector = Icons.Default.PieChart,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    modifier = Modifier.size(24.dp)
-                )
-            } else {
-                Image(
-                    bitmap = app.icon.asImageBitmap(),
-                    contentDescription = app.appName,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(4.dp)
-                )
-            }
-        }
+        AppIcon(icon = app.icon, appName = app.appName)
 
         Spacer(modifier = Modifier.width(14.dp))
 
@@ -569,6 +626,13 @@ private fun AppUsageRow(app: AnalyzerAppUsage) {
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
             )
         }
+
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = "View screenshots",
+            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
+            modifier = Modifier.size(24.dp)
+        )
     }
 
     // Subtle divider
@@ -873,3 +937,457 @@ private fun formatDateLabel(date: LocalDate): String {
     val formatter = DateTimeFormatter.ofPattern("MMMM d", Locale.getDefault())
     return "$dayName, ${date.format(formatter)}"
 }
+
+// ── App screenshots detailed page ────────────────────────────
+
+data class AppScreenshot(
+    val file: File,
+    val time: LocalTime,
+    val timeLabel: String,
+    val hour: Int
+)
+
+@Composable
+private fun AppScreenshotsDetail(
+    app: AnalyzerAppUsage,
+    date: LocalDate,
+    onBack: () -> Unit
+) {
+    var screenshots by remember { mutableStateOf<List<AppScreenshot>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var selectedHour by remember { mutableStateOf<Int?>(null) }
+    var previewScreenshot by remember { mutableStateOf<AppScreenshot?>(null) }
+
+    LaunchedEffect(app.packageName, app.appName, date) {
+        isLoading = true
+        screenshots = loadAppScreenshotsForDay(app.packageName, app.appName, date)
+        isLoading = false
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(16.dp)
+    ) {
+        // --- Header ---
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = MaterialTheme.colorScheme.onBackground
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            AppIcon(icon = app.icon, appName = app.appName)
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = app.appName,
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = formatDateLabel(date),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                )
+            }
+        }
+
+        if (isLoading) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = NeonPurple)
+            }
+        } else if (screenshots.isEmpty()) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.Image,
+                        contentDescription = null,
+                        modifier = Modifier.size(54.dp),
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "No screenshots captured for this app today.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            // Horizontal scrollable hours
+            val availableHours = remember(screenshots) {
+                screenshots.map { it.hour }.distinct().sorted()
+            }
+
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item {
+                    val isSelected = selectedHour == null
+                    HourChip(
+                        label = "All Hours",
+                        count = screenshots.size,
+                        isSelected = isSelected,
+                        onClick = { selectedHour = null }
+                    )
+                }
+                items(availableHours) { hour ->
+                    val isSelected = selectedHour == hour
+                    val count = remember(hour, screenshots) {
+                        screenshots.count { it.hour == hour }
+                    }
+                    HourChip(
+                        label = hourLabel(hour),
+                        count = count,
+                        isSelected = isSelected,
+                        onClick = { selectedHour = hour }
+                    )
+                }
+            }
+
+            val filteredScreenshots = remember(selectedHour, screenshots) {
+                if (selectedHour == null) screenshots else screenshots.filter { it.hour == selectedHour }
+            }
+
+            if (filteredScreenshots.isEmpty()) {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "No screenshots captured in this hour.",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 16.dp)
+                ) {
+                    items(filteredScreenshots, key = { it.file.absolutePath }) { screenshot ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(0.72f)
+                                .clickable { previewScreenshot = screenshot },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                FileBitmapImage(
+                                    file = screenshot.file,
+                                    targetSize = 350,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .fillMaxWidth()
+                                        .background(Color.Black.copy(alpha = 0.58f))
+                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        text = screenshot.timeLabel,
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        ),
+                                        color = Color.White,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    previewScreenshot?.let { screenshot ->
+        val filtered = remember(selectedHour, screenshots) {
+            if (selectedHour == null) screenshots else screenshots.filter { it.hour == selectedHour }
+        }
+        AppScreenshotPreviewDialog(
+            screenshots = filtered,
+            initialScreenshot = screenshot,
+            onDismiss = { previewScreenshot = null }
+        )
+    }
+}
+
+@Composable
+private fun HourChip(
+    label: String,
+    count: Int,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val backgroundColor by animateColorAsState(
+        targetValue = if (isSelected) NeonPurple else MaterialTheme.colorScheme.surface,
+        label = "chipBg"
+    )
+    val contentColor = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface
+
+    Surface(
+        modifier = Modifier.clickable(
+            indication = null,
+            interactionSource = remember { MutableInteractionSource() },
+            onClick = onClick
+        ),
+        shape = RoundedCornerShape(16.dp),
+        color = backgroundColor
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = contentColor
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Surface(
+                shape = CircleShape,
+                color = if (isSelected) Color.White.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.size(18.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = count.toString(),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                        color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppScreenshotPreviewDialog(
+    screenshots: List<AppScreenshot>,
+    initialScreenshot: AppScreenshot,
+    onDismiss: () -> Unit
+) {
+    val initialIndex = remember(screenshots, initialScreenshot) {
+        screenshots.indexOfFirst { it.file.absolutePath == initialScreenshot.file.absolutePath }.coerceAtLeast(0)
+    }
+    val pagerState = rememberPagerState(initialPage = initialIndex) { screenshots.size }
+    val currentScreenshot = screenshots.getOrNull(pagerState.currentPage) ?: initialScreenshot
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = Color.Black
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize(),
+                    userScrollEnabled = screenshots.size > 1
+                ) { page ->
+                    val item = screenshots[page]
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        FileBitmapImage(
+                            file = item.file,
+                            targetSize = 1600,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth(),
+                    color = Color.Black.copy(alpha = 0.72f)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = currentScreenshot.timeLabel,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Color.White,
+                                maxLines = 1
+                            )
+                            if (screenshots.size > 1) {
+                                Text(
+                                    text = "${pagerState.currentPage + 1}/${screenshots.size}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.72f),
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close",
+                                tint = Color.White
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FileBitmapImage(
+    file: File,
+    targetSize: Int,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale
+) {
+    var bitmap by remember(file.absolutePath, targetSize) { mutableStateOf<Bitmap?>(null) }
+
+    LaunchedEffect(file.absolutePath, targetSize) {
+        bitmap = withContext(Dispatchers.IO) {
+            decodeSampledBitmap(file, targetSize)
+        }
+    }
+
+    val currentBitmap = bitmap
+    if (currentBitmap == null) {
+        Box(
+            modifier = modifier.background(MaterialTheme.colorScheme.surface),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Image,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.36f),
+                modifier = Modifier.size(32.dp)
+            )
+        }
+    } else {
+        Image(
+            bitmap = currentBitmap.asImageBitmap(),
+            contentDescription = file.name,
+            modifier = modifier,
+            contentScale = contentScale
+        )
+    }
+}
+
+// ── Private Helper Functions ──────────────────────────────────
+
+private suspend fun loadAppScreenshotsForDay(
+    packageName: String,
+    appName: String,
+    date: LocalDate
+): List<AppScreenshot> = withContext(Dispatchers.IO) {
+    val year = date.year.toString()
+    val month = String.format(Locale.US, "%02d", date.monthValue)
+    val day = String.format(Locale.US, "%02d", date.dayOfMonth)
+    
+    val rootDir = File("/storage/emulated/0/Screenshot/$year/$month/$day")
+    if (!rootDir.exists() || !rootDir.isDirectory) {
+        return@withContext emptyList()
+    }
+
+    val sanitizedAppName = sanitizeAppNameForFilename(appName)
+    val timeFormatter = DateTimeFormatter.ofPattern("hh:mm a", Locale.getDefault())
+    val filenameTimeRegex = Regex("""(\d{2})_(\d{2})_(\d{2})""")
+
+    rootDir.listFiles()?.filter { file ->
+        file.isFile && 
+        file.extension.lowercase(Locale.US) in setOf("webp", "jpg", "jpeg", "png") &&
+        (file.name.startsWith(sanitizedAppName + "_", ignoreCase = true) || 
+         file.name.startsWith(packageName + "_", ignoreCase = true) ||
+         file.name.startsWith(sanitizeAppNameForFilename(packageName) + "_", ignoreCase = true))
+    }?.map { file ->
+        val filenameMatch = filenameTimeRegex.find(file.nameWithoutExtension)
+        val hour = filenameMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+        val minute = filenameMatch?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 0
+        val second = filenameMatch?.groupValues?.getOrNull(3)?.toIntOrNull() ?: 0
+        
+        val time = LocalTime.of(hour.coerceIn(0, 23), minute.coerceIn(0, 59), second.coerceIn(0, 59))
+        val timeLabel = timeFormatter.format(time)
+        
+        AppScreenshot(
+            file = file,
+            time = time,
+            timeLabel = timeLabel,
+            hour = hour
+        )
+    }?.sortedByDescending { it.time } ?: emptyList()
+}
+
+private fun sanitizeAppNameForFilename(appName: String): String {
+    return appName
+        .trim()
+        .replace(Regex("""\s+"""), "_")
+        .replace(Regex("""[^A-Za-z0-9._-]"""), "_")
+        .trim('_')
+}
+
+private fun decodeSampledBitmap(file: File, targetSize: Int): Bitmap? {
+    val bounds = BitmapFactory.Options().apply {
+        inJustDecodeBounds = true
+    }
+    BitmapFactory.decodeFile(file.absolutePath, bounds)
+
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+        return null
+    }
+
+    val options = BitmapFactory.Options().apply {
+        inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, targetSize)
+    }
+
+    return BitmapFactory.decodeFile(file.absolutePath, options)
+}
+
+private fun calculateInSampleSize(width: Int, height: Int, targetSize: Int): Int {
+    var sampleSize = 1
+    val halfWidth = width / 2
+    val halfHeight = height / 2
+
+    while (halfWidth / sampleSize >= targetSize && halfHeight / sampleSize >= targetSize) {
+        sampleSize *= 2
+    }
+
+    return sampleSize.coerceAtLeast(1)
+}
+
+private fun hourLabel(hour: Int): String {
+    val formatter = DateTimeFormatter.ofPattern("h a", Locale.getDefault())
+    return formatter.format(LocalTime.of(hour.coerceIn(0, 23), 0))
+}
+

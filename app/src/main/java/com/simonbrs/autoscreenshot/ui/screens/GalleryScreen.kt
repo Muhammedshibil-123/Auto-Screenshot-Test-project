@@ -2,9 +2,15 @@ package com.simonbrs.autoscreenshot.ui.screens
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -78,6 +84,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -731,12 +738,32 @@ private fun ScreenshotPreviewDialog(
     val pagerState = rememberPagerState(initialPage = initialIndex) { images.size }
     val currentImage = images.getOrNull(pagerState.currentPage) ?: initialImage
 
+    var showBar by remember { mutableStateOf(true) }
+
+    LaunchedEffect(pagerState.currentPage) {
+        showBar = true
+    }
+
+    LaunchedEffect(showBar) {
+        if (showBar) {
+            delay(1500L)
+            showBar = false
+        }
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    showBar = !showBar
+                },
             color = Color.Black
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -758,48 +785,58 @@ private fun ScreenshotPreviewDialog(
                         )
                     }
                 }
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth(),
-                    color = Color.Black.copy(alpha = 0.72f)
+                AnimatedVisibility(
+                    visible = showBar,
+                    enter = fadeIn() + slideInVertically { -it },
+                    exit = fadeOut() + slideOutVertically { -it },
+                    modifier = Modifier.align(Alignment.TopCenter)
                 ) {
-                    Row(
+                    Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { /* Consume clicks to prevent toggling showBar */ },
+                        color = Color.Black.copy(alpha = 0.72f)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = currentImage.dayLabel,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
-                                maxLines = 1
-                            )
-                            Text(
-                                text = buildString {
-                                    append(currentImage.timeLabel)
-                                    append(" - ")
-                                    append(formatBytes(currentImage.fileSizeBytes))
-                                    if (images.size > 1) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = currentImage.dayLabel,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color.White,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = buildString {
+                                        append(currentImage.timeLabel)
                                         append(" - ")
-                                        append(pagerState.currentPage + 1)
-                                        append("/")
-                                        append(images.size)
-                                    }
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.White.copy(alpha = 0.72f),
-                                maxLines = 1
-                            )
-                        }
-                        IconButton(onClick = onDismiss) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close image",
-                                tint = Color.White
-                            )
+                                        append(formatBytes(currentImage.fileSizeBytes))
+                                        if (images.size > 1) {
+                                            append(" - ")
+                                            append(pagerState.currentPage + 1)
+                                            append("/")
+                                            append(images.size)
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.White.copy(alpha = 0.72f),
+                                    maxLines = 1
+                                )
+                            }
+                            IconButton(onClick = onDismiss) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close image",
+                                    tint = Color.White
+                                )
+                            }
                         }
                     }
                 }
