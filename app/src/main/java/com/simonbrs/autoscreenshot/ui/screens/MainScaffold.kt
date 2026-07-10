@@ -102,9 +102,11 @@ fun MainScaffold(
                     onOpenSetup = onOpenSetup,
                     onRefresh = onRefresh
                 )
-                1 -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { 
-                    Text("Gallery Screen Coming Soon", color = MaterialTheme.colorScheme.onBackground) 
-                }
+                1 -> GalleryScreen(
+                    hasStorageAccess = hasStorageAccess,
+                    onOpenSetup = onOpenSetup,
+                    onRefresh = onRefresh
+                )
                 2 -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { 
                     Text("Settings Screen Coming Soon", color = MaterialTheme.colorScheme.onBackground) 
                 }
