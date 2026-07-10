@@ -108,6 +108,7 @@ fun MainScaffold(
                 )
                 2 -> SettingsScreen(
                     hasStorageAccess = hasStorageAccess,
+                    intervalSeconds = initialIntervalSeconds,
                     onOpenSetup = onOpenSetup,
                     onRefresh = onRefresh
                 )

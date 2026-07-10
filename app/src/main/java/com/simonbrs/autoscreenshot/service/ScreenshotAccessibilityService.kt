@@ -24,13 +24,18 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         private const val MIN_INTERVAL_SECONDS = 1L
         private const val SCREENSHOT_QUALITY = 65
         private const val SCREENSHOT_EXTENSION = "webp"
+        private const val SCREENSHOT_ROOT_PATH = "/storage/emulated/0/Screenshot"
+        private const val AUTO_DELETE_CLEANUP_INTERVAL_MILLIS = 60L * 60L * 1000L
         private val SCREENSHOT_COMPRESS_FORMAT = Bitmap.CompressFormat.WEBP_LOSSY
+        private val SCREENSHOT_IMAGE_EXTENSIONS = setOf("webp", "jpg", "jpeg", "png")
 
         const val DEFAULT_INTERVAL_SECONDS = 10L
+        const val DEFAULT_AUTO_DELETE_RETENTION_DAYS = 30
         const val PREFS_NAME = "AutoScreenshotPrefs"
         const val KEY_SERVICE_ENABLED = "service_enabled"
         const val KEY_SERVICE_RUNNING = "service_running"
         const val KEY_SCREENSHOT_INTERVAL_SECONDS = "screenshot_interval_seconds"
+        const val KEY_AUTO_DELETE_RETENTION_DAYS = "auto_delete_retention_days"
         const val ACTION_SERVICE_STATUS_CHANGED = "com.simonbrs.autoscreenshot.SERVICE_STATUS_CHANGED"
         const val EXTRA_IS_RUNNING = "extra_is_running"
 
@@ -53,6 +58,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
 
     private var captureLoopRunning = false
     private var previousScreenshotPath: String? = null
+    private var lastAutoDeleteCleanupMillis = 0L
 
     private val captureRunnable = object : Runnable {
         override fun run() {
@@ -221,7 +227,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
             val minute = String.format(Locale.US, "%02d", calendar.get(Calendar.MINUTE))
             val second = String.format(Locale.US, "%02d", calendar.get(Calendar.SECOND))
 
-            val dirPath = "/storage/emulated/0/Screenshot/$year/$month/$day"
+            val dirPath = "$SCREENSHOT_ROOT_PATH/$year/$month/$day"
             val filename = "${hour}_${minute}_${second}.$SCREENSHOT_EXTENSION"
             val fullPath = "$dirPath/$filename"
 
@@ -264,6 +270,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
                 previousScreenshotPath = fullPath
                 val count = screenshotCount.incrementAndGet()
                 Log.d(TAG, "Screenshot saved to $fullPath, total: $count")
+                cleanupOldScreenshotsIfNeeded()
             }
         } catch (e: IOException) {
             Log.e(TAG, "Failed to save screenshot", e)
@@ -310,5 +317,49 @@ class ScreenshotAccessibilityService : AccessibilityService() {
             Log.e(TAG, "Error comparing screenshot files", e)
             false
         }
+    }
+
+    private fun cleanupOldScreenshotsIfNeeded() {
+        val now = System.currentTimeMillis()
+        if (now - lastAutoDeleteCleanupMillis < AUTO_DELETE_CLEANUP_INTERVAL_MILLIS) {
+            return
+        }
+
+        lastAutoDeleteCleanupMillis = now
+        val retentionDays = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getInt(KEY_AUTO_DELETE_RETENTION_DAYS, DEFAULT_AUTO_DELETE_RETENTION_DAYS)
+            .coerceIn(1, 365)
+
+        try {
+            deleteOldScreenshotImages(retentionDays)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to clean up old screenshots", e)
+        }
+    }
+
+    private fun deleteOldScreenshotImages(retentionDays: Int) {
+        val root = File(SCREENSHOT_ROOT_PATH)
+        if (!root.exists() || !root.isDirectory) {
+            return
+        }
+
+        val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(retentionDays.toLong())
+        root.walkTopDown()
+            .filter { file ->
+                file.isFile &&
+                    file.extension.lowercase(Locale.US) in SCREENSHOT_IMAGE_EXTENSIONS &&
+                    file.lastModified() < cutoff
+            }
+            .forEach { file ->
+                if (file.delete()) {
+                    Log.d(TAG, "Deleted old screenshot: ${file.absolutePath}")
+                }
+            }
+
+        root.walkBottomUp()
+            .filter { file -> file.isDirectory && file != root && file.listFiles()?.isEmpty() == true }
+            .forEach { directory ->
+                directory.delete()
+            }
     }
 }
