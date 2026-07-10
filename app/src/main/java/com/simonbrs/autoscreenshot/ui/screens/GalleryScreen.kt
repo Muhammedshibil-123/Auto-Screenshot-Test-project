@@ -27,12 +27,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -45,6 +48,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -63,6 +67,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -76,6 +81,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -101,13 +107,15 @@ data class ScreenshotImage(
     val hour: Int,
     val dayLabel: String,
     val timeLabel: String,
+    val fileSizeBytes: Long,
     val lastModified: Long
 )
 
 data class GalleryDateOption(
     val date: LocalDate,
     val label: String,
-    val count: Int
+    val count: Int,
+    val totalSizeBytes: Long
 )
 
 data class GalleryHourOption(
@@ -125,7 +133,8 @@ data class GalleryUiState(
         GalleryHourOption(hour = hour, label = hourLabel(hour), count = 0)
     },
     val selectedDate: LocalDate? = null,
-    val selectedHour: Int? = null
+    val selectedHour: Int? = null,
+    val selectedSpacingMinutes: Int? = null
 )
 
 class GalleryViewModel : ViewModel() {
@@ -158,6 +167,7 @@ class GalleryViewModel : ViewModel() {
                 images = images,
                 selectedDate = selectedDate,
                 selectedHour = selectedHour,
+                selectedSpacingMinutes = uiState.selectedSpacingMinutes,
                 isLoading = false
             )
         }
@@ -168,6 +178,7 @@ class GalleryViewModel : ViewModel() {
             images = uiState.allImages,
             selectedDate = date,
             selectedHour = null,
+            selectedSpacingMinutes = uiState.selectedSpacingMinutes,
             isLoading = false
         )
     }
@@ -178,6 +189,18 @@ class GalleryViewModel : ViewModel() {
             images = uiState.allImages,
             selectedDate = date,
             selectedHour = hour,
+            selectedSpacingMinutes = uiState.selectedSpacingMinutes,
+            isLoading = false
+        )
+    }
+
+    fun selectSpacingMinutes(minutes: Int?) {
+        val safeMinutes = minutes?.coerceAtLeast(1)
+        uiState = buildState(
+            images = uiState.allImages,
+            selectedDate = uiState.selectedDate,
+            selectedHour = uiState.selectedHour,
+            selectedSpacingMinutes = safeMinutes,
             isLoading = false
         )
     }
@@ -187,6 +210,7 @@ class GalleryViewModel : ViewModel() {
             images = uiState.allImages,
             selectedDate = null,
             selectedHour = null,
+            selectedSpacingMinutes = null,
             isLoading = false
         )
     }
@@ -195,6 +219,7 @@ class GalleryViewModel : ViewModel() {
         images: List<ScreenshotImage>,
         selectedDate: LocalDate?,
         selectedHour: Int?,
+        selectedSpacingMinutes: Int?,
         isLoading: Boolean
     ): GalleryUiState {
         val dateOptions = images
@@ -203,16 +228,18 @@ class GalleryViewModel : ViewModel() {
                 GalleryDateOption(
                     date = date,
                     label = dateLabelFormatter.format(date),
-                    count = dateImages.size
+                    count = dateImages.size,
+                    totalSizeBytes = dateImages.sumOf { it.fileSizeBytes }
                 )
             }
             .sortedByDescending { it.date }
 
-        val visibleImages = images.filter { image ->
+        val filteredImages = images.filter { image ->
             val dateMatches = selectedDate == null || image.date == selectedDate
             val hourMatches = selectedHour == null || image.hour == selectedHour
             dateMatches && hourMatches
         }
+        val visibleImages = filteredImages.withMinimumSpacing(selectedSpacingMinutes)
 
         val hourOptions = hoursOfDay.map { hour ->
             GalleryHourOption(
@@ -229,7 +256,8 @@ class GalleryViewModel : ViewModel() {
             dateOptions = dateOptions,
             hourOptions = hourOptions,
             selectedDate = selectedDate,
-            selectedHour = selectedHour
+            selectedHour = selectedHour,
+            selectedSpacingMinutes = selectedSpacingMinutes
         )
     }
 }
@@ -250,6 +278,7 @@ fun GalleryScreen(
     val uiState = viewModel.uiState
     var selectedImage by remember { mutableStateOf<ScreenshotImage?>(null) }
     var showFilterSheet by rememberSaveable { mutableStateOf(false) }
+    var showSpacingDialog by rememberSaveable { mutableStateOf(false) }
     var filterSheetStep by remember { mutableStateOf(FilterSheetStep.Dates) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -264,10 +293,11 @@ fun GalleryScreen(
     ) {
         GalleryTopBar(
             uiState = uiState,
-            onOpenFilter = {
+            onOpenDateFilter = {
                 filterSheetStep = FilterSheetStep.Dates
                 showFilterSheet = true
             },
+            onOpenSpacingFilter = { showSpacingDialog = true },
             onClearFilter = viewModel::clearFilter,
             onRefresh = {
                 onRefresh()
@@ -322,6 +352,21 @@ fun GalleryScreen(
         }
     }
 
+    if (showSpacingDialog) {
+        ScreenshotSpacingDialog(
+            currentMinutes = uiState.selectedSpacingMinutes,
+            onDismiss = { showSpacingDialog = false },
+            onApply = { minutes ->
+                viewModel.selectSpacingMinutes(minutes)
+                showSpacingDialog = false
+            },
+            onClear = {
+                viewModel.selectSpacingMinutes(null)
+                showSpacingDialog = false
+            }
+        )
+    }
+
     selectedImage?.let { image ->
         ScreenshotPreviewDialog(
             images = uiState.visibleImages,
@@ -334,7 +379,8 @@ fun GalleryScreen(
 @Composable
 private fun GalleryTopBar(
     uiState: GalleryUiState,
-    onOpenFilter: () -> Unit,
+    onOpenDateFilter: () -> Unit,
+    onOpenSpacingFilter: () -> Unit,
     onClearFilter: () -> Unit,
     onRefresh: () -> Unit
 ) {
@@ -358,13 +404,16 @@ private fun GalleryTopBar(
                 overflow = TextOverflow.Ellipsis
             )
         }
-        if (uiState.selectedDate != null || uiState.selectedHour != null) {
+        if (uiState.hasActiveFilter()) {
             TextButton(onClick = onClearFilter) {
                 Text("Clear")
             }
         }
-        IconButton(onClick = onOpenFilter) {
+        IconButton(onClick = onOpenDateFilter) {
             Icon(Icons.Default.DateRange, contentDescription = "Filter screenshots by date")
+        }
+        IconButton(onClick = onOpenSpacingFilter) {
+            Icon(Icons.Default.FilterList, contentDescription = "Filter screenshots by spacing")
         }
         IconButton(onClick = onRefresh) {
             Icon(Icons.Default.Refresh, contentDescription = "Refresh gallery")
@@ -451,6 +500,68 @@ private fun ScreenshotThumbnail(
 }
 
 @Composable
+private fun ScreenshotSpacingDialog(
+    currentMinutes: Int?,
+    onDismiss: () -> Unit,
+    onApply: (Int) -> Unit,
+    onClear: () -> Unit
+) {
+    var minutesText by rememberSaveable(currentMinutes) {
+        mutableStateOf(currentMinutes?.toString() ?: "")
+    }
+    val minutes = minutesText.toIntOrNull()
+    val isValid = minutes != null && minutes >= 1
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Screenshot spacing") },
+        text = {
+            Column {
+                Text(
+                    text = "Show one screenshot, then skip ahead by this many minutes before showing the next one.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                OutlinedTextField(
+                    value = minutesText,
+                    onValueChange = { value ->
+                        minutesText = value.filter { it.isDigit() }.take(4)
+                    },
+                    label = { Text("Minutes") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = minutesText.isNotBlank() && !isValid,
+                    supportingText = {
+                        Text("Example: 5 shows screenshots at least 5 minutes apart.")
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { minutes?.let(onApply) },
+                enabled = isValid
+            ) {
+                Text("Apply")
+            }
+        },
+        dismissButton = {
+            Row {
+                if (currentMinutes != null) {
+                    TextButton(onClick = onClear) {
+                        Text("Clear")
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
+            }
+        }
+    )
+}
+
+@Composable
 private fun GalleryFilterSheet(
     step: FilterSheetStep,
     uiState: GalleryUiState,
@@ -513,12 +624,19 @@ private fun DateSelectionContent(
                     Text("${option.count} screenshot${if (option.count == 1) "" else "s"}")
                 },
                 trailingContent = {
-                    if (selected) {
+                    Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            text = "Selected",
+                            text = formatBytes(option.totalSizeBytes),
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
                         )
+                        if (selected) {
+                            Text(
+                                text = "Selected",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 },
                 modifier = Modifier
@@ -662,8 +780,10 @@ private fun ScreenshotPreviewDialog(
                             Text(
                                 text = buildString {
                                     append(currentImage.timeLabel)
+                                    append(" - ")
+                                    append(formatBytes(currentImage.fileSizeBytes))
                                     if (images.size > 1) {
-                                        append("  ")
+                                        append(" - ")
                                         append(pagerState.currentPage + 1)
                                         append("/")
                                         append(images.size)
@@ -828,7 +948,7 @@ private fun EmptyFilterState(
             )
             Spacer(modifier = Modifier.height(14.dp))
             Text(
-                text = "No screenshots in this hour",
+                text = "No screenshots match this filter",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground
@@ -875,6 +995,7 @@ private fun File.toScreenshotImage(root: File): ScreenshotImage {
         hour = capturedAt.hour,
         dayLabel = dateLabelFormatter.format(capturedAt),
         timeLabel = timeFormatter.format(capturedAt),
+        fileSizeBytes = length(),
         lastModified = lastModified()
     )
 }
@@ -953,11 +1074,66 @@ private fun calculateInSampleSize(width: Int, height: Int, targetSize: Int): Int
     return sampleSize.coerceAtLeast(1)
 }
 
+private fun List<ScreenshotImage>.withMinimumSpacing(spacingMinutes: Int?): List<ScreenshotImage> {
+    val spacing = spacingMinutes ?: return this
+    if (spacing <= 0 || size <= 1) {
+        return this
+    }
+
+    val sampledImages = mutableListOf<ScreenshotImage>()
+    var lastKeptImage: ScreenshotImage? = null
+
+    for (image in this) {
+        val lastKept = lastKeptImage
+        if (lastKept == null) {
+            sampledImages += image
+            lastKeptImage = image
+            continue
+        }
+
+        val minutesBetween = Duration.between(image.capturedAt, lastKept.capturedAt).toMinutes()
+        if (minutesBetween >= spacing) {
+            sampledImages += image
+            lastKeptImage = image
+        }
+    }
+
+    return sampledImages
+}
+
 private fun GalleryUiState.activeFilterLabel(): String {
-    val date = selectedDate ?: return "All screenshots"
-    val dateLabel = shortDateFormatter.format(date)
-    val hour = selectedHour ?: return dateLabel
-    return "$dateLabel, ${hourLabel(hour)}"
+    val dateLabel = selectedDate?.let { date ->
+        val hour = selectedHour
+        if (hour == null) {
+            shortDateFormatter.format(date)
+        } else {
+            "${shortDateFormatter.format(date)}, ${hourLabel(hour)}"
+        }
+    } ?: "All screenshots"
+
+    val spacingLabel = selectedSpacingMinutes?.let { minutes ->
+        "every $minutes min"
+    }
+
+    return listOfNotNull(dateLabel, spacingLabel).joinToString(", ")
+}
+
+private fun GalleryUiState.hasActiveFilter(): Boolean {
+    return selectedDate != null || selectedHour != null || selectedSpacingMinutes != null
+}
+
+private fun formatBytes(bytes: Long): String {
+    val safeBytes = bytes.coerceAtLeast(0L)
+    val kb = 1024.0
+    val mb = kb * 1024.0
+    val gb = mb * 1024.0
+
+    return when {
+        safeBytes >= gb -> String.format(Locale.getDefault(), "%.2f GB", safeBytes / gb)
+        safeBytes >= mb -> String.format(Locale.getDefault(), "%.2f MB", safeBytes / mb)
+        safeBytes >= kb -> String.format(Locale.getDefault(), "%.1f KB", safeBytes / kb)
+        else -> "$safeBytes B"
+    }
 }
 
 private fun hourLabel(hour: Int): String {

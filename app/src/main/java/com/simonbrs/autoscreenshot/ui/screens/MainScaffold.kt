@@ -9,7 +9,6 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -107,9 +106,11 @@ fun MainScaffold(
                     onOpenSetup = onOpenSetup,
                     onRefresh = onRefresh
                 )
-                2 -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { 
-                    Text("Settings Screen Coming Soon", color = MaterialTheme.colorScheme.onBackground) 
-                }
+                2 -> SettingsScreen(
+                    hasStorageAccess = hasStorageAccess,
+                    onOpenSetup = onOpenSetup,
+                    onRefresh = onRefresh
+                )
             }
         }
     }
