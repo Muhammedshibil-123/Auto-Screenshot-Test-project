@@ -12,6 +12,7 @@ import com.simonbrs.autoscreenshot.callrecorder.data.CallDirection
 import com.simonbrs.autoscreenshot.callrecorder.data.RecorderAudioSource
 import com.simonbrs.autoscreenshot.callrecorder.data.RecorderPrefs
 import com.simonbrs.autoscreenshot.callrecorder.data.RecordingRepository
+import com.simonbrs.autoscreenshot.security.MediaCrypto
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -30,6 +31,7 @@ object CallRecorderEngine {
     private const val TAG = "CallRecorderEngine"
     private const val CALL_LOG_SETTLE_MILLIS = 2_000L
     private const val CALL_LOG_MATCH_WINDOW_MILLIS = 2L * 60L * 1000L
+    private const val PENDING_SEPARATOR = "__"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -63,7 +65,9 @@ object CallRecorderEngine {
             return false
         }
 
-        val file = File(RecordingRepository.tempDir(), "rec_${System.currentTimeMillis()}.${RecordingRepository.EXTENSION}")
+        // Record into app-private storage; only the encrypted copy goes to the shared folder.
+        val privateDir = File(context.applicationContext.noBackupFilesDir, "recording").apply { mkdirs() }
+        val file = File(privateDir, "rec_${System.currentTimeMillis()}.${RecordingRepository.EXTENSION}")
         for (source in audioSourcesFor(RecorderPrefs.audioSource(context))) {
             val candidate = MediaRecorder(context)
             try {
@@ -149,12 +153,47 @@ object CallRecorderEngine {
         }
 
         val target = RecordingRepository.buildFinalFile(direction, number, callStartedAt, durationSeconds)
-        if (!tempFile.renameTo(target)) {
-            tempFile.copyTo(target, overwrite = true)
+        try {
+            MediaCrypto.encryptFile(tempFile, target)
             tempFile.delete()
+        } catch (e: Exception) {
+            // Usually the vault is locked (reinstalled, password not entered yet).
+            // Keep the recording privately and encrypt it after unlocking.
+            Log.w(TAG, "Encrypting recording failed, keeping it pending", e)
+            target.delete()
+            val pendingName = "${target.parentFile?.name}$PENDING_SEPARATOR${target.name}"
+            tempFile.renameTo(File(pendingDir(context), pendingName))
         }
+        flushPendingNow(context)
 
         RecordingRepository.deleteOlderThan(RecorderPrefs.retentionDays(context))
+        notifyRecordingsChanged()
+    }
+
+    private fun pendingDir(context: Context): File =
+        File(context.applicationContext.noBackupFilesDir, "recording_pending").apply { mkdirs() }
+
+    /** Encrypts recordings that were kept aside while the vault was locked. */
+    fun flushPending(context: Context) {
+        val appContext = context.applicationContext
+        scope.launch { flushPendingNow(appContext) }
+    }
+
+    private fun flushPendingNow(context: Context) {
+        val pending = pendingDir(context).listFiles().orEmpty()
+        if (pending.isEmpty()) return
+        pending.forEach { file ->
+            val dayFolder = file.name.substringBefore(PENDING_SEPARATOR)
+            val name = file.name.substringAfter(PENDING_SEPARATOR)
+            val target = File(File(RecordingRepository.root, dayFolder).apply { mkdirs() }, name)
+            try {
+                MediaCrypto.encryptFile(file, target)
+                file.delete()
+            } catch (e: Exception) {
+                target.delete()
+                return // still locked; try again later
+            }
+        }
         notifyRecordingsChanged()
     }
 

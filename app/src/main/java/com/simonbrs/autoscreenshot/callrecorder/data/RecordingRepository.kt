@@ -67,6 +67,8 @@ object RecordingRepository {
         val prefix = if (direction == CallDirection.Incoming) "IN" else "OUT"
         val safeNumber = sanitizeNumber(number) ?: UNKNOWN_NUMBER_TOKEN
         val dir = File(root, dayFolder).apply { mkdirs() }
+        // Keep music/media apps from listing the encrypted files.
+        File(root, ".nomedia").takeIf { !it.exists() }?.let { runCatching { it.createNewFile() } }
         return File(dir, "${prefix}_${safeNumber}_${stamp}_${durationSeconds.coerceAtLeast(0L)}.$EXTENSION")
     }
 
@@ -81,7 +83,8 @@ object RecordingRepository {
         missingCache.clear()
     }
 
-    fun loadRecordings(context: Context): List<CallRecording> {
+    /** Lists and parses recording files. Fast: no contact lookups. */
+    fun loadRecordings(): List<CallRecording> {
         val base = root
         if (!base.exists() || !base.isDirectory) return emptyList()
 
@@ -89,10 +92,15 @@ object RecordingRepository {
             .onEnter { dir -> dir.name != TEMP_DIR }
             .filter { it.isRecordingFile() }
             .mapNotNull { file -> parse(file) }
-            .map { recording -> recording.copy(contactName = lookupContactName(context, recording.number)) }
             .sortedByDescending { it.recordedAt }
             .toList()
     }
+
+    /** One contact lookup per unique number. Returns number -> contact name. */
+    fun resolveNames(context: Context, numbers: Collection<String>): Map<String, String> =
+        numbers.toSet().mapNotNull { number ->
+            lookupContactName(context, number)?.let { name -> number to name }
+        }.toMap()
 
     fun storageStats(): RecordingStorageStats {
         val base = root

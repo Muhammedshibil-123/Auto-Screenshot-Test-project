@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Warning
@@ -74,6 +75,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.simonbrs.autoscreenshot.security.LocalPasswordGate
+import com.simonbrs.autoscreenshot.security.PasswordSettingsPage
 import com.simonbrs.autoscreenshot.service.ScreenshotAccessibilityService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -97,7 +100,8 @@ private enum class SettingsPage {
     Notice,
     Storage,
     Saved,
-    Terms
+    Terms,
+    Password
 }
 
 data class SettingsStorageUiState(
@@ -180,6 +184,7 @@ fun SettingsScreen(
     val storageState = viewModel.storageState
     var page by rememberSaveable { mutableStateOf(SettingsPage.Main) }
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
+    val passwordGate = LocalPasswordGate.current
 
     BackHandler(enabled = page != SettingsPage.Main) {
         page = SettingsPage.Main
@@ -197,7 +202,8 @@ fun SettingsScreen(
             onOpenNotice = { page = SettingsPage.Notice },
             onOpenStorage = { page = SettingsPage.Storage },
             onOpenSaved = { page = SettingsPage.Saved },
-            onOpenTerms = { page = SettingsPage.Terms }
+            onOpenTerms = { page = SettingsPage.Terms },
+            onOpenPassword = { page = SettingsPage.Password }
         )
 
         SettingsPage.About -> AboutSettingsPage(onBack = { page = SettingsPage.Main })
@@ -222,7 +228,11 @@ fun SettingsScreen(
                     onUpdated = onRefresh
                 )
             },
-            onDeleteClick = { showDeleteDialog = true }
+            onDeleteClick = {
+                passwordGate.guard("Enter the password to delete screenshots.") {
+                    showDeleteDialog = true
+                }
+            }
         )
 
         SettingsPage.Saved -> SavedScreenshotsPage(
@@ -233,6 +243,8 @@ fun SettingsScreen(
         )
 
         SettingsPage.Terms -> TermsSettingsPage(onBack = { page = SettingsPage.Main })
+
+        SettingsPage.Password -> PasswordSettingsPage(onBack = { page = SettingsPage.Main })
     }
 
     if (showDeleteDialog) {
@@ -257,7 +269,8 @@ private fun SettingsMainPage(
     onOpenNotice: () -> Unit,
     onOpenStorage: () -> Unit,
     onOpenSaved: () -> Unit,
-    onOpenTerms: () -> Unit
+    onOpenTerms: () -> Unit,
+    onOpenPassword: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier
@@ -298,6 +311,15 @@ private fun SettingsMainPage(
                     "Storage access needed"
                 },
                 onClick = onOpenStorage
+            )
+        }
+
+        item {
+            SettingsMenuItem(
+                icon = Icons.Default.Lock,
+                title = "Password",
+                subtitle = "Delete / Off password for screenshots and recordings",
+                onClick = onOpenPassword
             )
         }
 
@@ -412,6 +434,7 @@ private fun StorageSettingsPage(
         mutableIntStateOf(state.autoDeleteDays.coerceIn(MIN_RETENTION_DAYS, MAX_RETENTION_DAYS))
     }
     val estimateBytes = estimatedBackupBytes(sliderDays, intervalSeconds)
+    val passwordGate = LocalPasswordGate.current
 
     SettingsDetailPage(
         title = "Storage",
@@ -518,7 +541,16 @@ private fun StorageSettingsPage(
                     intervalSeconds = intervalSeconds,
                     estimateBytes = estimateBytes,
                     onDaysChanged = { days -> sliderDays = days },
-                    onDragFinished = { onAutoDeleteDaysChanged(sliderDays) }
+                    onDragFinished = {
+                        if (sliderDays != state.autoDeleteDays) {
+                            passwordGate.guard(
+                                reason = "Enter the password to change automatic delete.",
+                                onCancel = { sliderDays = state.autoDeleteDays }
+                            ) {
+                                onAutoDeleteDaysChanged(sliderDays)
+                            }
+                        }
+                    }
                 )
             }
         }
@@ -1055,6 +1087,7 @@ private fun SavedScreenshotsPage(
     var savedImages by remember { mutableStateOf<List<ScreenshotImage>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var selectedImage by remember { mutableStateOf<ScreenshotImage?>(null) }
+    var shown by rememberSaveable { mutableIntStateOf(SCREENSHOT_PAGE_SIZE) }
 
     LaunchedEffect(Unit) {
         isLoading = true
@@ -1135,7 +1168,7 @@ private fun SavedScreenshotsPage(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
-                items(savedImages, key = { it.file.absolutePath }) { image ->
+                items(savedImages.take(shown), key = { it.file.absolutePath }) { image ->
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1155,6 +1188,11 @@ private fun SavedScreenshotsPage(
                         }
                     }
                 }
+                loadMoreFooter(
+                    shown = shown,
+                    total = savedImages.size,
+                    onLoadMore = { shown += SCREENSHOT_PAGE_SIZE }
+                )
             }
         }
     }

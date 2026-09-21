@@ -7,6 +7,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.simonbrs.autoscreenshot.ui.screens.MainScaffold
 import com.simonbrs.autoscreenshot.ui.screens.OnboardingScreens
+import com.simonbrs.autoscreenshot.security.LocalPasswordGate
 import com.simonbrs.autoscreenshot.ui.shell.AppShell
 
 @Composable
@@ -60,6 +61,7 @@ fun AppNavigation(
         composable("main") {
             AppShell(
                 autoScreenshotContent = {
+                    val passwordGate = LocalPasswordGate.current
                     MainScaffold(
                         isCaptureRunning = isCaptureRunning,
                         isAccessibilityEnabled = isAccessibilityEnabled,
@@ -67,8 +69,16 @@ fun AppNavigation(
                         isBatteryUnrestricted = isBatteryUnrestricted,
                         isAutostartSetupAcknowledged = isAutostartSetupAcknowledged,
                         initialIntervalSeconds = initialIntervalSeconds,
-                        onStartCapture = onStartCapture,
-                        onStopCapture = onStopCapture,
+                        onStartCapture = { seconds ->
+                            passwordGate.guard("Enter the password to turn on Auto Screenshot.") {
+                                onStartCapture(seconds)
+                            }
+                        },
+                        onStopCapture = {
+                            passwordGate.guard("Enter the password to turn off Auto Screenshot.") {
+                                onStopCapture()
+                            }
+                        },
                         onOpenSetup = {
                             navController.navigate("onboarding")
                         },

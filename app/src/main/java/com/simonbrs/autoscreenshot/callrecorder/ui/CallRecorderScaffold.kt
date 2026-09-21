@@ -27,8 +27,8 @@ private data class RecorderTab(val label: String, val icon: ImageVector)
 
 private val recorderTabs = listOf(
     RecorderTab("Home", Icons.Default.Mic),
-    RecorderTab("Recordings", Icons.Default.Contacts),
     RecorderTab("Unknown", Icons.Default.PersonOff),
+    RecorderTab("Recordings", Icons.Default.Contacts),
     RecorderTab("Settings", Icons.Default.Settings)
 )
 
@@ -64,8 +64,8 @@ fun CallRecorderScaffold() {
         ) {
             when (selectedTab) {
                 0 -> RecorderHomeScreen()
-                1 -> RecordingsScreen(filter = RecordingFilter.SavedContacts)
-                2 -> RecordingsScreen(filter = RecordingFilter.UnknownNumbers)
+                1 -> RecordingsScreen(filter = RecordingFilter.Unknown)
+                2 -> RecordingsScreen(filter = RecordingFilter.AllCalls)
                 3 -> RecorderSettingsScreen()
             }
         }

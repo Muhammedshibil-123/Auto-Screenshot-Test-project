@@ -13,8 +13,9 @@ import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import com.simonbrs.autoscreenshot.data.AppSessionStore
+import com.simonbrs.autoscreenshot.security.MediaCrypto
+import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.util.Calendar
 import java.util.Locale
@@ -64,6 +65,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
 
     private var captureLoopRunning = false
     private var previousScreenshotPath: String? = null
+    private var previousScreenshotBytes: ByteArray? = null
     private var lastAutoDeleteCleanupMillis = 0L
     @Volatile
     private var currentPackageName: String? = null
@@ -297,25 +299,30 @@ class ScreenshotAccessibilityService : AccessibilityService() {
             val file = File(fullPath)
             var isNewScreenshot = true
 
-            FileOutputStream(file).use { out ->
+            val imageBytes = ByteArrayOutputStream().use { out ->
                 val success = bitmap.compress(SCREENSHOT_COMPRESS_FORMAT, SCREENSHOT_QUALITY, out)
                 if (!success) {
-                    Log.e(TAG, "Failed to compress screenshot to file")
+                    Log.e(TAG, "Failed to compress screenshot")
                     return
                 }
+                out.toByteArray()
             }
 
-            previousScreenshotPath?.let { previousPath ->
-                val previousFile = File(previousPath)
-                if (previousFile.exists() && areFilesIdentical(previousFile, file)) {
-                    file.delete()
-                    isNewScreenshot = false
-                    Log.d(TAG, "Deleted duplicate screenshot: $fullPath")
-                }
+            // Compare the image itself (before encryption) with the previous screenshot.
+            val previousBytes = previousScreenshotBytes
+            if (previousBytes != null &&
+                previousScreenshotPath?.let { File(it).exists() } == true &&
+                previousBytes.contentEquals(imageBytes)
+            ) {
+                isNewScreenshot = false
+                Log.d(TAG, "Skipped duplicate screenshot: $fullPath")
+            } else {
+                MediaCrypto.encryptingOutputStream(file).use { out -> out.write(imageBytes) }
             }
 
             if (isNewScreenshot) {
                 previousScreenshotPath = fullPath
+                previousScreenshotBytes = imageBytes
                 val count = screenshotCount.incrementAndGet()
                 Log.d(TAG, "Screenshot saved to $fullPath, total: $count")
                 cleanupOldScreenshotsIfNeeded()
@@ -399,46 +406,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
             .replace(Regex("""\s+"""), "_")
             .replace(Regex("""[^A-Za-z0-9._-]"""), "_")
             .trim('_')
-    }
-
-    private fun areFilesIdentical(file1: File, file2: File): Boolean {
-        if (!file1.exists() || !file2.exists() || file1.length() != file2.length()) {
-            return false
-        }
-
-        return try {
-            file1.inputStream().use { is1 ->
-                file2.inputStream().use { is2 ->
-                    val buf1 = ByteArray(8192)
-                    val buf2 = ByteArray(8192)
-                    var identical = true
-                    var done = false
-
-                    while (!done && identical) {
-                        val read1 = is1.read(buf1)
-                        val read2 = is2.read(buf2)
-
-                        if (read1 != read2) {
-                            identical = false
-                        } else if (read1 <= 0) {
-                            done = true
-                        } else {
-                            for (index in 0 until read1) {
-                                if (buf1[index] != buf2[index]) {
-                                    identical = false
-                                    break
-                                }
-                            }
-                        }
-                    }
-
-                    identical
-                }
-            }
-        } catch (e: IOException) {
-            Log.e(TAG, "Error comparing screenshot files", e)
-            false
-        }
     }
 
     private fun cleanupOldScreenshotsIfNeeded() {

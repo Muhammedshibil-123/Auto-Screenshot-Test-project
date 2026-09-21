@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import com.simonbrs.autoscreenshot.security.MediaCrypto
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
 import android.os.Process
@@ -75,6 +76,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -1073,6 +1075,9 @@ private fun AppScreenshotsDetail(
             val filteredScreenshots = remember(selectedHour, screenshots) {
                 if (selectedHour == null) screenshots else screenshots.filter { it.hour == selectedHour }
             }
+            var shownScreenshots by remember(selectedHour, screenshots) {
+                mutableIntStateOf(SCREENSHOT_PAGE_SIZE)
+            }
 
             if (filteredScreenshots.isEmpty()) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -1090,7 +1095,7 @@ private fun AppScreenshotsDetail(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     contentPadding = PaddingValues(bottom = 16.dp)
                 ) {
-                    items(filteredScreenshots, key = { it.file.absolutePath }) { screenshot ->
+                    items(filteredScreenshots.take(shownScreenshots), key = { it.file.absolutePath }) { screenshot ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1127,6 +1132,11 @@ private fun AppScreenshotsDetail(
                             }
                         }
                     }
+                    loadMoreFooter(
+                        shown = shownScreenshots,
+                        total = filteredScreenshots.size,
+                        onLoadMore = { shownScreenshots += SCREENSHOT_PAGE_SIZE }
+                    )
                 }
             }
         }
@@ -1398,7 +1408,13 @@ private fun decodeSampledBitmap(file: File, targetSize: Int): Bitmap? {
     val bounds = BitmapFactory.Options().apply {
         inJustDecodeBounds = true
     }
-    BitmapFactory.decodeFile(file.absolutePath, bounds)
+    // Screenshots may be encrypted; decode from the decrypted bytes.
+    val bytes = try {
+        MediaCrypto.readBytes(file)
+    } catch (_: Exception) {
+        return null
+    }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
 
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
         return null
@@ -1408,7 +1424,7 @@ private fun decodeSampledBitmap(file: File, targetSize: Int): Bitmap? {
         inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, targetSize)
     }
 
-    return BitmapFactory.decodeFile(file.absolutePath, options)
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
 }
 
 private fun calculateInSampleSize(width: Int, height: Int, targetSize: Int): Int {

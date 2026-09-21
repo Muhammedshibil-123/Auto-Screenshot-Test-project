@@ -16,6 +16,8 @@ object RecorderPrefs {
     const val KEY_RECORD_OUTGOING = "recorder_record_outgoing"
     const val KEY_ONLY_UNKNOWN = "recorder_only_unknown"
     const val KEY_AUDIO_SOURCE = "recorder_audio_source"
+    const val KEY_APPROVED_NUMBERS = "recorder_approved_numbers"
+    const val KEY_APPROVED_FILES = "recorder_approved_files"
 
     const val DEFAULT_RETENTION_DAYS = 30
     const val MIN_RETENTION_DAYS = 1
@@ -53,6 +55,33 @@ object RecorderPrefs {
 
     fun setBoolean(context: Context, key: String, value: Boolean) {
         prefs(context).edit().putBoolean(key, value).apply()
+    }
+
+    /** Compares numbers by their last 10 digits so "+91 98..." matches "98...". */
+    fun normalizeNumber(number: String?): String? =
+        number?.filter { it.isDigit() }?.takeLast(10)?.ifEmpty { null }
+
+    fun approvedNumbers(context: Context): Set<String> =
+        prefs(context).getStringSet(KEY_APPROVED_NUMBERS, emptySet()).orEmpty().toSet()
+
+    fun approvedFiles(context: Context): Set<String> =
+        prefs(context).getStringSet(KEY_APPROVED_FILES, emptySet()).orEmpty().toSet()
+
+    /**
+     * Marks a recording as reviewed. Recordings with a number approve the
+     * whole number (current and future calls); others approve only that file.
+     */
+    fun approve(context: Context, recording: CallRecording) {
+        val normalized = normalizeNumber(recording.number)
+        if (normalized != null) {
+            prefs(context).edit()
+                .putStringSet(KEY_APPROVED_NUMBERS, approvedNumbers(context) + normalized)
+                .apply()
+        } else {
+            prefs(context).edit()
+                .putStringSet(KEY_APPROVED_FILES, approvedFiles(context) + recording.file.name)
+                .apply()
+        }
     }
 
     fun setAudioSource(context: Context, source: RecorderAudioSource) {

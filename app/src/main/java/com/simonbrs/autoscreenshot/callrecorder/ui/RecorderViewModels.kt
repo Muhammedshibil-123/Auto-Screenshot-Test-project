@@ -18,8 +18,19 @@ import kotlinx.coroutines.withContext
 
 data class RecordingsUiState(
     val isLoading: Boolean = true,
-    val recordings: List<CallRecording> = emptyList()
-)
+    val recordings: List<CallRecording> = emptyList(),
+    val approvedNumbers: Set<String> = emptySet(),
+    val approvedFiles: Set<String> = emptySet()
+) {
+    fun isApproved(recording: CallRecording): Boolean {
+        val normalized = RecorderPrefs.normalizeNumber(recording.number)
+        return if (normalized != null) {
+            normalized in approvedNumbers
+        } else {
+            recording.file.name in approvedFiles
+        }
+    }
+}
 
 class RecordingsViewModel : ViewModel() {
     var state by mutableStateOf(RecordingsUiState())
@@ -35,12 +46,36 @@ class RecordingsViewModel : ViewModel() {
             if (state.recordings.isEmpty()) {
                 state = state.copy(isLoading = true)
             }
-            val recordings = withContext(Dispatchers.IO) {
+            // Step 1: show the files right away, keeping any names already known.
+            val knownNames = state.recordings
+                .mapNotNull { r -> r.number?.let { n -> r.contactName?.let { n to it } } }
+                .toMap()
+            val parsed = withContext(Dispatchers.IO) { RecordingRepository.loadRecordings() }
+            state = state.copy(
+                isLoading = false,
+                recordings = parsed.map { it.copy(contactName = it.number?.let(knownNames::get)) },
+                approvedNumbers = RecorderPrefs.approvedNumbers(appContext),
+                approvedFiles = RecorderPrefs.approvedFiles(appContext)
+            )
+
+            // Step 2: resolve contact names in the background.
+            val names = withContext(Dispatchers.IO) {
                 RecordingRepository.clearContactCache()
-                RecordingRepository.loadRecordings(appContext)
+                RecordingRepository.resolveNames(appContext, parsed.mapNotNull { it.number })
             }
-            state = RecordingsUiState(isLoading = false, recordings = recordings)
+            state = state.copy(
+                recordings = parsed.map { it.copy(contactName = it.number?.let(names::get)) }
+            )
         }
+    }
+
+    fun approve(context: Context, recording: CallRecording) {
+        val appContext = context.applicationContext
+        RecorderPrefs.approve(appContext, recording)
+        state = state.copy(
+            approvedNumbers = RecorderPrefs.approvedNumbers(appContext),
+            approvedFiles = RecorderPrefs.approvedFiles(appContext)
+        )
     }
 
     fun delete(context: Context, recording: CallRecording) {
@@ -54,6 +89,7 @@ class RecordingsViewModel : ViewModel() {
     fun toggleStar(context: Context, recording: CallRecording) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { RecordingRepository.toggleStar(recording) }
+            CallRecorderEngine.notifyRecordingsChanged()
             refresh(context)
         }
     }

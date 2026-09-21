@@ -51,6 +51,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.simonbrs.autoscreenshot.callrecorder.data.RecorderPrefs
 import com.simonbrs.autoscreenshot.callrecorder.service.CallRecorderAccessibilityService
 import com.simonbrs.autoscreenshot.callrecorder.service.CallRecorderEngine
+import com.simonbrs.autoscreenshot.security.LocalPasswordGate
 import com.simonbrs.autoscreenshot.ui.screens.SetupStatusRow
 import com.simonbrs.autoscreenshot.ui.screens.StartStopButton
 import com.simonbrs.autoscreenshot.ui.screens.StatusCard
@@ -123,6 +124,7 @@ fun RecorderHomeScreen(
     val isRecordingNow by CallRecorderEngine.isRecording.collectAsState()
     val recordingsVersion by CallRecorderEngine.recordingsVersion.collectAsState()
     val latest = recordingsViewModel.state.recordings.firstOrNull()
+    val passwordGate = LocalPasswordGate.current
 
     LaunchedEffect(resumeTick, recordingsVersion) {
         recordingsViewModel.refresh(context)
@@ -209,18 +211,25 @@ fun RecorderHomeScreen(
         StartStopButton(
             isActive = isEnabled,
             onClick = {
-                if (isEnabled) {
-                    RecorderPrefs.setEnabled(context, false)
-                    Toast.makeText(context, "Call recording turned off", Toast.LENGTH_SHORT).show()
+                val reason = if (isEnabled) {
+                    "Enter the password to turn off call recording."
                 } else {
-                    RecorderPrefs.setEnabled(context, true)
-                    if (setup.requiredReady) {
-                        Toast.makeText(context, "Calls will be recorded automatically", Toast.LENGTH_SHORT).show()
-                    } else {
-                        requestNextSetupStep(setup)
-                    }
+                    "Enter the password to turn on call recording."
                 }
-                refreshTick += 1
+                passwordGate.guard(reason) {
+                    if (isEnabled) {
+                        RecorderPrefs.setEnabled(context, false)
+                        Toast.makeText(context, "Call recording turned off", Toast.LENGTH_SHORT).show()
+                    } else {
+                        RecorderPrefs.setEnabled(context, true)
+                        if (setup.requiredReady) {
+                            Toast.makeText(context, "Calls will be recorded automatically", Toast.LENGTH_SHORT).show()
+                        } else {
+                            requestNextSetupStep(setup)
+                        }
+                    }
+                    refreshTick += 1
+                }
             }
         )
 

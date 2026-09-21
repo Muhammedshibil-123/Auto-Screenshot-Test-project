@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <external-path
-        name="call_recordings"
-        path="CallRecordings/" />
+    <!-- Decrypted copies made only when the user taps Share -->
+    <cache-path
+        name="shared_recordings"
+        path="shared/" />
 </paths>

@@ -2,7 +2,9 @@ package com.simonbrs.autoscreenshot.ui.screens
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import com.simonbrs.autoscreenshot.security.MediaCrypto
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -64,6 +66,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -436,6 +439,12 @@ private fun ScreenshotGrid(
     images: List<ScreenshotImage>,
     onImageClick: (ScreenshotImage) -> Unit
 ) {
+    // Starts at 50 again whenever the filter changes the list.
+    var shown by rememberSaveable(images.size, images.firstOrNull()?.file?.absolutePath) {
+        mutableIntStateOf(SCREENSHOT_PAGE_SIZE)
+    }
+    val page = remember(images, shown) { images.take(shown) }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Text(
             text = "${images.size} screenshot${if (images.size == 1) "" else "s"}",
@@ -451,7 +460,7 @@ private fun ScreenshotGrid(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
-            items(images, key = { it.file.absolutePath }) { image ->
+            items(page, key = { it.file.absolutePath }) { image ->
                 ScreenshotThumbnail(
                     image = image,
                     modifier = Modifier
@@ -460,6 +469,11 @@ private fun ScreenshotGrid(
                     onClick = { onImageClick(image) }
                 )
             }
+            loadMoreFooter(
+                shown = shown,
+                total = images.size,
+                onLoadMore = { shown += SCREENSHOT_PAGE_SIZE }
+            )
         }
     }
 }
@@ -884,34 +898,56 @@ fun FileBitmapImage(
     modifier: Modifier = Modifier,
     contentScale: ContentScale
 ) {
-    var bitmap by remember(file.absolutePath, targetSize) { mutableStateOf<Bitmap?>(null) }
+    val cacheKey = remember(file.absolutePath, targetSize) {
+        ThumbnailCache.key(file.absolutePath, file.lastModified(), targetSize)
+    }
+    var bitmap by remember(cacheKey) { mutableStateOf<Bitmap?>(ThumbnailCache.get(cacheKey)) }
+    var failed by remember(cacheKey) { mutableStateOf(false) }
 
-    LaunchedEffect(file.absolutePath, targetSize) {
-        bitmap = withContext(Dispatchers.IO) {
+    LaunchedEffect(cacheKey) {
+        if (bitmap != null) return@LaunchedEffect
+        val decoded = withContext(Dispatchers.IO) {
             decodeSampledBitmap(file, targetSize)
+        }
+        if (decoded != null) {
+            ThumbnailCache.put(cacheKey, decoded)
+            bitmap = decoded
+        } else {
+            failed = true
         }
     }
 
-    val currentBitmap = bitmap
-    if (currentBitmap == null) {
-        Box(
-            modifier = modifier.background(MaterialTheme.colorScheme.surface),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Image,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.36f),
-                modifier = Modifier.size(32.dp)
+    Crossfade(targetState = bitmap, label = "thumbnail", modifier = modifier) { currentBitmap ->
+        if (currentBitmap == null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (failed) {
+                    Icon(
+                        imageVector = Icons.Default.Image,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.36f),
+                        modifier = Modifier.size(32.dp)
+                    )
+                } else {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                    )
+                }
+            }
+        } else {
+            Image(
+                bitmap = currentBitmap.asImageBitmap(),
+                contentDescription = file.name,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = contentScale
             )
         }
-    } else {
-        Image(
-            bitmap = currentBitmap.asImageBitmap(),
-            contentDescription = file.name,
-            modifier = modifier,
-            contentScale = contentScale
-        )
     }
 }
 
@@ -1119,7 +1155,13 @@ private fun decodeSampledBitmap(file: File, targetSize: Int): Bitmap? {
     val bounds = BitmapFactory.Options().apply {
         inJustDecodeBounds = true
     }
-    BitmapFactory.decodeFile(file.absolutePath, bounds)
+    // Screenshots may be encrypted; decode from the decrypted bytes.
+    val bytes = try {
+        MediaCrypto.readBytes(file)
+    } catch (_: Exception) {
+        return null
+    }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
 
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
         return null
@@ -1129,7 +1171,7 @@ private fun decodeSampledBitmap(file: File, targetSize: Int): Bitmap? {
         inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, targetSize)
     }
 
-    return BitmapFactory.decodeFile(file.absolutePath, options)
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
 }
 
 private fun calculateInSampleSize(width: Int, height: Int, targetSize: Int): Int {

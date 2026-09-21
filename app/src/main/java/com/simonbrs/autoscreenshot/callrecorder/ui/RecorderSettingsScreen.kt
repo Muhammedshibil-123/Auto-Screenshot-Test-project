@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
@@ -52,11 +54,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.simonbrs.autoscreenshot.callrecorder.data.RecorderAudioSource
 import com.simonbrs.autoscreenshot.callrecorder.data.RecorderPrefs
 import com.simonbrs.autoscreenshot.callrecorder.service.CallRecorderEngine
+import com.simonbrs.autoscreenshot.security.LocalPasswordGate
+import com.simonbrs.autoscreenshot.security.PasswordSettingsPage
 import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private enum class RecorderSettingsPage { Main, Storage, Options, Notice }
+private enum class RecorderSettingsPage { Main, Saved, Storage, Options, Password, Notice }
 
 @Composable
 fun RecorderSettingsScreen(
@@ -68,6 +72,7 @@ fun RecorderSettingsScreen(
     var page by rememberSaveable { mutableStateOf(RecorderSettingsPage.Main) }
     var showDeleteDialog by rememberSaveable { mutableStateOf(false) }
     val state = viewModel.state
+    val passwordGate = LocalPasswordGate.current
 
     BackHandler(enabled = page != RecorderSettingsPage.Main) {
         page = RecorderSettingsPage.Main
@@ -95,6 +100,14 @@ fun RecorderSettingsScreen(
             }
             item {
                 RecorderMenuItem(
+                    icon = Icons.Default.Star,
+                    title = "Saved",
+                    subtitle = "${state.starredCount} kept recording${if (state.starredCount == 1) "" else "s"}",
+                    onClick = { page = RecorderSettingsPage.Saved }
+                )
+            }
+            item {
+                RecorderMenuItem(
                     icon = Icons.Default.Storage,
                     title = "Storage",
                     subtitle = "${state.recordingCount} recordings, ${formatRecorderBytes(state.recordingBytes)} · " +
@@ -112,6 +125,14 @@ fun RecorderSettingsScreen(
             }
             item {
                 RecorderMenuItem(
+                    icon = Icons.Default.Lock,
+                    title = "Password",
+                    subtitle = "Delete / Off password for recordings and screenshots",
+                    onClick = { page = RecorderSettingsPage.Password }
+                )
+            }
+            item {
+                RecorderMenuItem(
                     icon = Icons.Default.Warning,
                     title = "Notice",
                     subtitle = "Consent, privacy and Android limits",
@@ -124,9 +145,22 @@ fun RecorderSettingsScreen(
             state = state,
             onBack = { page = RecorderSettingsPage.Main },
             onRefresh = { viewModel.refresh(context) },
-            onDeleteClick = { showDeleteDialog = true },
+            onDeleteClick = {
+                passwordGate.guard("Enter the password to delete recordings.") {
+                    showDeleteDialog = true
+                }
+            },
             onRetentionChanged = { days -> viewModel.updateRetentionDays(context, days) }
         )
+
+        RecorderSettingsPage.Saved -> SavedRecordingsPage(
+            onBack = {
+                page = RecorderSettingsPage.Main
+                viewModel.refresh(context)
+            }
+        )
+
+        RecorderSettingsPage.Password -> PasswordSettingsPage(onBack = { page = RecorderSettingsPage.Main })
 
         RecorderSettingsPage.Options -> RecorderOptionsPage(onBack = { page = RecorderSettingsPage.Main })
 
@@ -147,7 +181,9 @@ fun RecorderSettingsScreen(
             )
             NoticeCard(
                 title = "Privacy",
-                body = "Recordings are saved only on this phone in the CallRecordings folder. Nothing is uploaded. " +
+                body = "Recordings are saved only on this phone in the CallRecordings folder, encrypted with a key " +
+                    "kept in Android's secure keystore. Other apps and file managers cannot play them. Nothing is uploaded. " +
+                    "If you uninstall the app the key is deleted and these recordings can no longer be opened. " +
                     "The accessibility service is used only to detect when calls start and end."
             )
         }
@@ -178,6 +214,7 @@ private fun RecorderStoragePage(
     var sliderDays by rememberSaveable(state.retentionDays) { mutableIntStateOf(state.retentionDays) }
     val usedBytes = (state.deviceTotalBytes - state.deviceFreeBytes).coerceAtLeast(0L)
     val usedProgress = if (state.deviceTotalBytes > 0L) usedBytes.toFloat() / state.deviceTotalBytes else 0f
+    val passwordGate = LocalPasswordGate.current
 
     RecorderDetailPage(title = "Storage", onBack = onBack) {
         if (state.isLoading) {
@@ -264,7 +301,16 @@ private fun RecorderStoragePage(
                     },
                     valueRange = RecorderPrefs.MIN_RETENTION_DAYS.toFloat()..RecorderPrefs.MAX_RETENTION_DAYS.toFloat(),
                     steps = RecorderPrefs.MAX_RETENTION_DAYS - RecorderPrefs.MIN_RETENTION_DAYS - 1,
-                    onValueChangeFinished = { onRetentionChanged(sliderDays) }
+                    onValueChangeFinished = {
+                        if (sliderDays != state.retentionDays) {
+                            passwordGate.guard(
+                                reason = "Enter the password to change automatic delete.",
+                                onCancel = { sliderDays = state.retentionDays }
+                            ) {
+                                onRetentionChanged(sliderDays)
+                            }
+                        }
+                    }
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
