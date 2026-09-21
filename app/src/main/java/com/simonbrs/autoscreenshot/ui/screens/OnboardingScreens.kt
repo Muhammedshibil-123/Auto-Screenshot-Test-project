@@ -229,13 +229,6 @@ fun OnboardingStepCard(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-                TextButton(
-                    onClick = onRefresh,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(text = "Refresh status")
-                }
             }
         }
     }

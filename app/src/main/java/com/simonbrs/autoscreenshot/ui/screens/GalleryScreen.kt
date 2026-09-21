@@ -36,6 +36,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.FilterList
@@ -64,6 +66,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -727,7 +730,7 @@ private fun HourSelectionContent(
 }
 
 @Composable
-private fun ScreenshotPreviewDialog(
+fun ScreenshotPreviewDialog(
     images: List<ScreenshotImage>,
     initialImage: ScreenshotImage,
     onDismiss: () -> Unit
@@ -739,6 +742,10 @@ private fun ScreenshotPreviewDialog(
     val currentImage = images.getOrNull(pagerState.currentPage) ?: initialImage
 
     var showBar by remember { mutableStateOf(true) }
+    val coroutineScope = rememberCoroutineScope()
+    var isCurrentSaved by remember(currentImage) {
+        mutableStateOf(File(File(SCREENSHOT_ROOT_PATH, "Saved"), currentImage.file.name).exists())
+    }
 
     LaunchedEffect(pagerState.currentPage) {
         showBar = true
@@ -830,6 +837,31 @@ private fun ScreenshotPreviewDialog(
                                     maxLines = 1
                                 )
                             }
+                            IconButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        val savedDir = File(SCREENSHOT_ROOT_PATH, "Saved")
+                                        if (!savedDir.exists()) {
+                                            savedDir.mkdirs()
+                                        }
+                                        val targetFile = File(savedDir, currentImage.file.name)
+                                        withContext(Dispatchers.IO) {
+                                            if (isCurrentSaved) {
+                                                targetFile.delete()
+                                            } else {
+                                                currentImage.file.copyTo(targetFile, overwrite = true)
+                                            }
+                                        }
+                                        isCurrentSaved = !isCurrentSaved
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = if (isCurrentSaved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                    contentDescription = "Save image",
+                                    tint = Color.White
+                                )
+                            }
                             IconButton(onClick = onDismiss) {
                                 Icon(
                                     imageVector = Icons.Default.Close,
@@ -846,7 +878,7 @@ private fun ScreenshotPreviewDialog(
 }
 
 @Composable
-private fun FileBitmapImage(
+fun FileBitmapImage(
     file: File,
     targetSize: Int,
     modifier: Modifier = Modifier,
@@ -1017,13 +1049,14 @@ private suspend fun loadScreenshotImages(): List<ScreenshotImage> = withContext(
     }
 
     root.walkTopDown()
+        .onEnter { dir -> dir.name != "Saved" }
         .filter { file -> file.isFile && file.extension.lowercase(Locale.US) in imageExtensions }
         .map { file -> file.toScreenshotImage(root) }
         .sortedByDescending { it.capturedAt }
         .toList()
 }
 
-private fun File.toScreenshotImage(root: File): ScreenshotImage {
+fun File.toScreenshotImage(root: File): ScreenshotImage {
     val capturedAt = captureTimeFromPath(root, this)
     return ScreenshotImage(
         file = this,
@@ -1159,7 +1192,7 @@ private fun GalleryUiState.hasActiveFilter(): Boolean {
     return selectedDate != null || selectedHour != null || selectedSpacingMinutes != null
 }
 
-private fun formatBytes(bytes: Long): String {
+fun formatBytes(bytes: Long): String {
     val safeBytes = bytes.coerceAtLeast(0L)
     val kb = 1024.0
     val mb = kb * 1024.0

@@ -17,21 +17,29 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -58,6 +66,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -86,7 +95,9 @@ private enum class SettingsPage {
     Main,
     About,
     Notice,
-    Storage
+    Storage,
+    Saved,
+    Terms
 }
 
 data class SettingsStorageUiState(
@@ -96,7 +107,8 @@ data class SettingsStorageUiState(
     val screenshotBytes: Long = 0L,
     val screenshotCount: Int = 0,
     val autoDeleteDays: Int = ScreenshotAccessibilityService.DEFAULT_AUTO_DELETE_RETENTION_DAYS,
-    val isDeleting: Boolean = false
+    val isDeleting: Boolean = false,
+    val savedCount: Int = 0
 )
 
 class SettingsViewModel : ViewModel() {
@@ -183,7 +195,9 @@ fun SettingsScreen(
             state = storageState,
             onOpenAbout = { page = SettingsPage.About },
             onOpenNotice = { page = SettingsPage.Notice },
-            onOpenStorage = { page = SettingsPage.Storage }
+            onOpenStorage = { page = SettingsPage.Storage },
+            onOpenSaved = { page = SettingsPage.Saved },
+            onOpenTerms = { page = SettingsPage.Terms }
         )
 
         SettingsPage.About -> AboutSettingsPage(onBack = { page = SettingsPage.Main })
@@ -210,6 +224,15 @@ fun SettingsScreen(
             },
             onDeleteClick = { showDeleteDialog = true }
         )
+
+        SettingsPage.Saved -> SavedScreenshotsPage(
+            onBack = {
+                page = SettingsPage.Main
+                viewModel.refreshStorage(context, hasStorageAccess)
+            }
+        )
+
+        SettingsPage.Terms -> TermsSettingsPage(onBack = { page = SettingsPage.Main })
     }
 
     if (showDeleteDialog) {
@@ -232,7 +255,9 @@ private fun SettingsMainPage(
     state: SettingsStorageUiState,
     onOpenAbout: () -> Unit,
     onOpenNotice: () -> Unit,
-    onOpenStorage: () -> Unit
+    onOpenStorage: () -> Unit,
+    onOpenSaved: () -> Unit,
+    onOpenTerms: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier
@@ -252,19 +277,14 @@ private fun SettingsMainPage(
 
         item {
             SettingsMenuItem(
-                icon = Icons.Default.Info,
-                title = "About",
-                subtitle = "App information and purpose",
-                onClick = onOpenAbout
-            )
-        }
-
-        item {
-            SettingsMenuItem(
-                icon = Icons.Default.Warning,
-                title = "Notice",
-                subtitle = "Usage notes and privacy reminder",
-                onClick = onOpenNotice
+                icon = Icons.Default.Bookmark,
+                title = "Saved",
+                subtitle = if (hasStorageAccess) {
+                    "${state.savedCount} saved screenshot${if (state.savedCount == 1) "" else "s"}"
+                } else {
+                    "Storage access needed"
+                },
+                onClick = onOpenSaved
             )
         }
 
@@ -280,6 +300,33 @@ private fun SettingsMainPage(
                 onClick = onOpenStorage
             )
         }
+
+        item {
+            SettingsMenuItem(
+                icon = Icons.Default.Description,
+                title = "Terms & Conditions",
+                subtitle = "App terms of use and compliance",
+                onClick = onOpenTerms
+            )
+        }
+
+        item {
+            SettingsMenuItem(
+                icon = Icons.Default.Warning,
+                title = "Notice",
+                subtitle = "Privacy policy & safety guidelines",
+                onClick = onOpenNotice
+            )
+        }
+
+        item {
+            SettingsMenuItem(
+                icon = Icons.Default.Info,
+                title = "About",
+                subtitle = "Zoro Engineering credits & version info",
+                onClick = onOpenAbout
+            )
+        }
     }
 }
 
@@ -291,13 +338,13 @@ private fun AboutSettingsPage(onBack: () -> Unit) {
     ) {
         SettingsInfoCard(
             icon = Icons.Default.Info,
-            title = "Auto Screenshot",
-            body = "Auto Screenshot captures periodic screenshots through Accessibility and saves them locally on this device. Version 1.0."
+            title = "Zoro AutoScreenshot",
+            body = "AutoScreenshot is a premium screen auditing and productivity utility developed by Zoro Labs. It automatically captures screen content at user-defined intervals, enabling seamless workflow tracking and local backup."
         )
         SettingsInfoCard(
             icon = Icons.Default.Storage,
-            title = "Local-first storage",
-            body = "Captured images are stored in the device Screenshot folder so you can review, filter, and delete them from the app."
+            title = "Zoro Engineering",
+            body = "Designed and engineered with a privacy-first mindset. Version 1.0. All screenshot files and usage stats are kept fully offline under your direct control."
         )
     }
 }
@@ -311,12 +358,31 @@ private fun NoticeSettingsPage(onBack: () -> Unit) {
         SettingsInfoCard(
             icon = Icons.Default.Warning,
             title = "Privacy reminder",
-            body = "Screenshots can include private information from other apps. Review the gallery often and delete captures you no longer need."
+            body = "Screenshots may contain sensitive information, including passwords, personal chats, and financial data. We highly recommend reviewing the gallery periodically and securely deleting older captures."
         )
         SettingsInfoCard(
             icon = Icons.Default.Info,
-            title = "Usage disclaimer",
-            body = "This placeholder notice is intended for app policy text. Make sure automatic capture is allowed by your device, workplace, and local rules before using it."
+            title = "Accessibility service notice",
+            body = "AutoScreenshot uses Android's Accessibility APIs solely to perform periodic screen capture operations in the background. It does not monitor keystrokes, transmit personal inputs, or connect to external servers."
+        )
+    }
+}
+
+@Composable
+private fun TermsSettingsPage(onBack: () -> Unit) {
+    SettingsDetailPage(
+        title = "Terms & Conditions",
+        onBack = onBack
+    ) {
+        SettingsInfoCard(
+            icon = Icons.Default.Description,
+            title = "Terms of use",
+            body = "By using AutoScreenshot, you agree to use this utility responsibly and in compliance with your organization's security policies, local privacy laws, and user consent guidelines. You assume full responsibility for all captured screen data."
+        )
+        SettingsInfoCard(
+            icon = Icons.Default.Warning,
+            title = "Limitation of liability",
+            body = "This software is provided 'as-is' by the Zoro Team. We are not liable for any data loss, unauthorized access, or regulatory non-compliance resulting from the configuration, storage, or distribution of screenshots captured by this app."
         )
     }
 }
@@ -851,6 +917,7 @@ private suspend fun loadStorageState(context: Context): SettingsStorageUiState =
     val totalBytes = statFs.blockCountLong * statFs.blockSizeLong
     val freeBytes = statFs.availableBlocksLong * statFs.blockSizeLong
     val screenshotStats = screenshotFolderStats()
+    val savedCount = countSavedScreenshots()
 
     SettingsStorageUiState(
         isLoading = false,
@@ -858,7 +925,8 @@ private suspend fun loadStorageState(context: Context): SettingsStorageUiState =
         freeBytes = freeBytes,
         screenshotBytes = screenshotStats.totalBytes,
         screenshotCount = screenshotStats.fileCount,
-        autoDeleteDays = readAutoDeleteDays(context)
+        autoDeleteDays = readAutoDeleteDays(context),
+        savedCount = savedCount
     )
 }
 
@@ -876,6 +944,7 @@ private fun screenshotFolderStats(): ScreenshotFolderStats {
     var totalBytes = 0L
     var fileCount = 0
     root.walkTopDown()
+        .onEnter { dir -> dir.name != "Saved" }
         .filter { it.isScreenshotImage() }
         .forEach { file ->
             totalBytes += file.length()
@@ -892,6 +961,7 @@ private fun deleteScreenshotImages() {
     }
 
     root.walkTopDown()
+        .onEnter { dir -> dir.name != "Saved" }
         .filter { it.isScreenshotImage() }
         .forEach { file ->
             file.delete()
@@ -908,6 +978,7 @@ private fun deleteOldScreenshotImages(retentionDays: Int) {
 
     val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(retentionDays.toLong())
     root.walkTopDown()
+        .onEnter { dir -> dir.name != "Saved" }
         .filter { file -> file.isScreenshotImage() && file.lastModified() < cutoff }
         .forEach { file ->
             file.delete()
@@ -918,7 +989,7 @@ private fun deleteOldScreenshotImages(retentionDays: Int) {
 
 private fun pruneEmptyScreenshotFolders(root: File) {
     root.walkBottomUp()
-        .filter { file -> file.isDirectory && file != root && file.listFiles()?.isEmpty() == true }
+        .filter { file -> file.isDirectory && file != root && file.name != "Saved" && file.listFiles()?.isEmpty() == true }
         .forEach { directory ->
             directory.delete()
         }
@@ -966,5 +1037,143 @@ private fun formatSettingsBytes(bytes: Long): String {
         safeBytes >= mb -> String.format(Locale.getDefault(), "%.2f MB", safeBytes / mb)
         safeBytes >= kb -> String.format(Locale.getDefault(), "%.1f KB", safeBytes / kb)
         else -> "$safeBytes B"
+    }
+}
+
+private fun countSavedScreenshots(): Int {
+    val savedDir = File(SETTINGS_SCREENSHOT_ROOT_PATH, "Saved")
+    if (!savedDir.exists() || !savedDir.isDirectory) {
+        return 0
+    }
+    return savedDir.listFiles()?.count { it.isFile && it.extension.lowercase(Locale.US) in settingsImageExtensions } ?: 0
+}
+
+@Composable
+private fun SavedScreenshotsPage(
+    onBack: () -> Unit
+) {
+    var savedImages by remember { mutableStateOf<List<ScreenshotImage>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var selectedImage by remember { mutableStateOf<ScreenshotImage?>(null) }
+
+    LaunchedEffect(Unit) {
+        isLoading = true
+        savedImages = withContext(Dispatchers.IO) {
+            val savedDir = File(SETTINGS_SCREENSHOT_ROOT_PATH, "Saved")
+            if (!savedDir.exists() || !savedDir.isDirectory) {
+                return@withContext emptyList()
+            }
+            val root = File(SETTINGS_SCREENSHOT_ROOT_PATH)
+            savedDir.listFiles()
+                ?.filter { file -> file.isFile && file.extension.lowercase(Locale.US) in settingsImageExtensions }
+                ?.map { file -> file.toScreenshotImage(root) }
+                ?.sortedByDescending { it.capturedAt }
+                ?: emptyList()
+        }
+        isLoading = false
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+            Text(
+                text = "Saved",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else if (savedImages.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Bookmark,
+                        contentDescription = null,
+                        modifier = Modifier.size(52.dp),
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "No saved screenshots",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Bookmark screenshots in the gallery to view them here.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 16.dp)
+            ) {
+                items(savedImages, key = { it.file.absolutePath }) { image ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(0.72f)
+                            .clickable { selectedImage = image },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            FileBitmapImage(
+                                file = image.file,
+                                targetSize = 520,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    selectedImage?.let { image ->
+        ScreenshotPreviewDialog(
+            images = savedImages,
+            initialImage = image,
+            onDismiss = {
+                selectedImage = null
+                // Refresh the list in case the user removed the bookmark inside the preview dialog
+                val savedDir = File(SETTINGS_SCREENSHOT_ROOT_PATH, "Saved")
+                val root = File(SETTINGS_SCREENSHOT_ROOT_PATH)
+                savedImages = savedDir.listFiles()
+                    ?.filter { file -> file.isFile && file.extension.lowercase(Locale.US) in settingsImageExtensions }
+                    ?.map { file -> file.toScreenshotImage(root) }
+                    ?.sortedByDescending { it.capturedAt }
+                    ?: emptyList()
+            }
+        )
     }
 }

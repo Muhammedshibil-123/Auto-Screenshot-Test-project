@@ -15,7 +15,12 @@ import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -49,10 +54,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PieChart
+import kotlinx.coroutines.delay
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -69,6 +77,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -1197,6 +1206,23 @@ private fun AppScreenshotPreviewDialog(
     val pagerState = rememberPagerState(initialPage = initialIndex) { screenshots.size }
     val currentScreenshot = screenshots.getOrNull(pagerState.currentPage) ?: initialScreenshot
 
+    var showBar by remember { mutableStateOf(true) }
+    val coroutineScope = rememberCoroutineScope()
+    var isCurrentSaved by remember(currentScreenshot) {
+        mutableStateOf(File(File("/storage/emulated/0/Screenshot", "Saved"), currentScreenshot.file.name).exists())
+    }
+
+    LaunchedEffect(pagerState.currentPage) {
+        showBar = true
+    }
+
+    LaunchedEffect(showBar) {
+        if (showBar) {
+            delay(1500L)
+            showBar = false
+        }
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -1205,7 +1231,16 @@ private fun AppScreenshotPreviewDialog(
             modifier = Modifier.fillMaxSize(),
             color = Color.Black
         ) {
-            Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        showBar = !showBar
+                    }
+            ) {
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize(),
@@ -1225,40 +1260,79 @@ private fun AppScreenshotPreviewDialog(
                     }
                 }
 
-                Surface(
+                AnimatedVisibility(
+                    visible = showBar,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .fillMaxWidth(),
-                    color = Color.Black.copy(alpha = 0.72f)
+                        .fillMaxWidth()
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color.Black.copy(alpha = 0.72f)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = currentScreenshot.timeLabel,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color.White,
-                                maxLines = 1
-                            )
-                            if (screenshots.size > 1) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "${pagerState.currentPage + 1}/${screenshots.size}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.White.copy(alpha = 0.72f),
+                                    text = currentScreenshot.timeLabel,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color.White,
                                     maxLines = 1
                                 )
+                                if (screenshots.size > 1) {
+                                    Text(
+                                        text = "${pagerState.currentPage + 1}/${screenshots.size}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.White.copy(alpha = 0.72f),
+                                        maxLines = 1
+                                    )
+                                }
                             }
-                        }
-                        IconButton(onClick = onDismiss) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close",
-                                tint = Color.White
-                            )
+
+                            IconButton(
+                                onClick = {
+                                    coroutineScope.launch(Dispatchers.IO) {
+                                        val savedDir = File("/storage/emulated/0/Screenshot", "Saved")
+                                        if (!savedDir.exists()) {
+                                            savedDir.mkdirs()
+                                        }
+                                        val targetFile = File(savedDir, currentScreenshot.file.name)
+                                        if (isCurrentSaved) {
+                                            if (targetFile.exists()) {
+                                                targetFile.delete()
+                                            }
+                                            isCurrentSaved = false
+                                        } else {
+                                            try {
+                                                currentScreenshot.file.copyTo(targetFile, overwrite = true)
+                                                isCurrentSaved = true
+                                            } catch (e: Exception) {
+                                                e.printStackTrace()
+                                            }
+                                        }
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = if (isCurrentSaved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                    contentDescription = if (isCurrentSaved) "Unsave screenshot" else "Save screenshot",
+                                    tint = Color.White
+                                )
+                            }
+
+                            IconButton(onClick = onDismiss) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close",
+                                    tint = Color.White
+                                )
+                            }
                         }
                     }
                 }
@@ -1267,43 +1341,6 @@ private fun AppScreenshotPreviewDialog(
     }
 }
 
-@Composable
-private fun FileBitmapImage(
-    file: File,
-    targetSize: Int,
-    modifier: Modifier = Modifier,
-    contentScale: ContentScale
-) {
-    var bitmap by remember(file.absolutePath, targetSize) { mutableStateOf<Bitmap?>(null) }
-
-    LaunchedEffect(file.absolutePath, targetSize) {
-        bitmap = withContext(Dispatchers.IO) {
-            decodeSampledBitmap(file, targetSize)
-        }
-    }
-
-    val currentBitmap = bitmap
-    if (currentBitmap == null) {
-        Box(
-            modifier = modifier.background(MaterialTheme.colorScheme.surface),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Image,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.36f),
-                modifier = Modifier.size(32.dp)
-            )
-        }
-    } else {
-        Image(
-            bitmap = currentBitmap.asImageBitmap(),
-            contentDescription = file.name,
-            modifier = modifier,
-            contentScale = contentScale
-        )
-    }
-}
 
 // ── Private Helper Functions ──────────────────────────────────
 

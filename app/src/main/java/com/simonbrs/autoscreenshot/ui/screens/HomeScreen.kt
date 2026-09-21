@@ -1,9 +1,17 @@
 package com.simonbrs.autoscreenshot.ui.screens
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -18,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.simonbrs.autoscreenshot.ui.theme.AccentGreen
@@ -81,6 +91,7 @@ fun HomeScreen(
 
         TimerInput(
             intervalSeconds = intervalSeconds,
+            isCaptureRunning = isCaptureRunning,
             onIntervalChange = { intervalSeconds = it }
         )
     }
@@ -203,34 +214,95 @@ fun StartStopButton(isActive: Boolean, onClick: () -> Unit) {
         label = "ButtonElevation"
     )
 
-    Button(
-        onClick = onClick,
-        modifier = Modifier
-            .size(160.dp)
-            .shadow(elevation, CircleShape),
-        shape = CircleShape,
-        colors = ButtonDefaults.buttonColors(containerColor = buttonColor),
-        contentPadding = PaddingValues(0.dp)
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 1.0f,
+        targetValue = 1.35f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "pulseScale"
+    )
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.5f,
+        targetValue = 0.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "pulseAlpha"
+    )
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.size(210.dp)
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = if (isActive) Icons.Default.Stop else Icons.Default.PlayArrow,
-                contentDescription = null,
-                modifier = Modifier.size(64.dp),
-                tint = Color.White
+        if (isActive) {
+            Box(
+                modifier = Modifier
+                    .size(160.dp)
+                    .graphicsLayer(
+                        scaleX = pulseScale,
+                        scaleY = pulseScale,
+                        alpha = pulseAlpha
+                    )
+                    .background(AccentRed, CircleShape)
             )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = if (isActive) "STOP" else "START",
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                color = Color.White
-            )
+        }
+
+        Button(
+            onClick = onClick,
+            modifier = Modifier
+                .size(160.dp)
+                .shadow(elevation, CircleShape),
+            shape = CircleShape,
+            colors = ButtonDefaults.buttonColors(containerColor = buttonColor),
+            contentPadding = PaddingValues(0.dp)
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (isActive) {
+                    Box(
+                        modifier = Modifier.size(64.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        // Premium video-style Stop button: outer thin ring + inner rounded square
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .border(2.5.dp, Color.White, CircleShape)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .background(Color.White, RoundedCornerShape(6.dp))
+                        )
+                    }
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = if (isActive) "STOP" else "START",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White
+                )
+            }
         }
     }
 }
 
 @Composable
-fun TimerInput(intervalSeconds: Float, onIntervalChange: (Float) -> Unit) {
+fun TimerInput(
+    intervalSeconds: Float,
+    isCaptureRunning: Boolean,
+    onIntervalChange: (Float) -> Unit
+) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -240,25 +312,27 @@ fun TimerInput(intervalSeconds: Float, onIntervalChange: (Float) -> Unit) {
             Text(
                 text = "Screenshot Interval",
                 style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface
+                color = if (isCaptureRunning) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f) else MaterialTheme.colorScheme.onSurface
             )
             Text(
                 text = "${intervalSeconds.toInt()}s",
                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.primary
+                color = if (isCaptureRunning) MaterialTheme.colorScheme.primary.copy(alpha = 0.38f) else MaterialTheme.colorScheme.primary
             )
         }
         Spacer(modifier = Modifier.height(16.dp))
         Slider(
             value = intervalSeconds,
             onValueChange = onIntervalChange,
+            enabled = !isCaptureRunning,
             valueRange = 1f..60f,
             steps = 59,
             colors = SliderDefaults.colors(
-                thumbColor = MaterialTheme.colorScheme.primary,
-                activeTrackColor = MaterialTheme.colorScheme.primary,
+                thumbColor = if (isCaptureRunning) MaterialTheme.colorScheme.primary.copy(alpha = 0.38f) else MaterialTheme.colorScheme.primary,
+                activeTrackColor = if (isCaptureRunning) MaterialTheme.colorScheme.primary.copy(alpha = 0.38f) else MaterialTheme.colorScheme.primary,
                 inactiveTrackColor = MaterialTheme.colorScheme.surface
             )
         )
+
     }
 }
