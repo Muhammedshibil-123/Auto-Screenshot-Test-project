@@ -7,6 +7,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.simonbrs.autoscreenshot.ui.screens.MainScaffold
 import com.simonbrs.autoscreenshot.ui.screens.OnboardingScreens
+import com.simonbrs.autoscreenshot.ui.shell.AppShell
 
 @Composable
 fun AppNavigation(
@@ -57,19 +58,23 @@ fun AppNavigation(
         }
         
         composable("main") {
-            MainScaffold(
-                isCaptureRunning = isCaptureRunning,
-                isAccessibilityEnabled = isAccessibilityEnabled,
-                hasStorageAccess = hasStorageAccess,
-                isBatteryUnrestricted = isBatteryUnrestricted,
-                isAutostartSetupAcknowledged = isAutostartSetupAcknowledged,
-                initialIntervalSeconds = initialIntervalSeconds,
-                onStartCapture = onStartCapture,
-                onStopCapture = onStopCapture,
-                onOpenSetup = {
-                    navController.navigate("onboarding")
-                },
-                onRefresh = onRefresh
+            AppShell(
+                autoScreenshotContent = {
+                    MainScaffold(
+                        isCaptureRunning = isCaptureRunning,
+                        isAccessibilityEnabled = isAccessibilityEnabled,
+                        hasStorageAccess = hasStorageAccess,
+                        isBatteryUnrestricted = isBatteryUnrestricted,
+                        isAutostartSetupAcknowledged = isAutostartSetupAcknowledged,
+                        initialIntervalSeconds = initialIntervalSeconds,
+                        onStartCapture = onStartCapture,
+                        onStopCapture = onStopCapture,
+                        onOpenSetup = {
+                            navController.navigate("onboarding")
+                        },
+                        onRefresh = onRefresh
+                    )
+                }
             )
         }
     }

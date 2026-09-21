@@ -2,4 +2,7 @@
     <string name="app_name">AutoScreenshot</string>
     <string name="accessibility_service_summary">Capture periodic screenshots after you enable AutoScreenshot.</string>
     <string name="accessibility_service_description">AutoScreenshot uses Accessibility screenshot access to save periodic screenshots at your chosen interval.</string>
+    <string name="call_recorder_service_label">Call Recorder</string>
+    <string name="call_recorder_accessibility_summary">Record phone calls automatically after you enable Call Recorder.</string>
+    <string name="call_recorder_accessibility_description">Call Recorder uses this service only to detect when a phone call starts and ends so it can record the call. It does not read screen content.</string>
 </resources>
