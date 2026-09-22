@@ -22,7 +22,6 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -31,9 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,7 +48,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.simonbrs.autoscreenshot.callrecorder.data.RecorderAudioSource
 import com.simonbrs.autoscreenshot.callrecorder.data.RecorderPrefs
 import com.simonbrs.autoscreenshot.callrecorder.service.CallRecorderEngine
 import com.simonbrs.autoscreenshot.security.LocalPasswordGate
@@ -60,7 +56,7 @@ import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private enum class RecorderSettingsPage { Main, Saved, Storage, Options, Password, Notice }
+private enum class RecorderSettingsPage { Main, Saved, Storage, Password, Notice }
 
 @Composable
 fun RecorderSettingsScreen(
@@ -117,14 +113,6 @@ fun RecorderSettingsScreen(
             }
             item {
                 RecorderMenuItem(
-                    icon = Icons.Default.Tune,
-                    title = "Recording options",
-                    subtitle = "Incoming, outgoing, unknown numbers, audio source",
-                    onClick = { page = RecorderSettingsPage.Options }
-                )
-            }
-            item {
-                RecorderMenuItem(
                     icon = Icons.Default.Lock,
                     title = "Password",
                     subtitle = "Delete / Off password for recordings and screenshots",
@@ -162,7 +150,6 @@ fun RecorderSettingsScreen(
 
         RecorderSettingsPage.Password -> PasswordSettingsPage(onBack = { page = RecorderSettingsPage.Main })
 
-        RecorderSettingsPage.Options -> RecorderOptionsPage(onBack = { page = RecorderSettingsPage.Main })
 
         RecorderSettingsPage.Notice -> RecorderDetailPage(
             title = "Notice",
@@ -181,10 +168,8 @@ fun RecorderSettingsScreen(
             )
             NoticeCard(
                 title = "Privacy",
-                body = "Recordings are saved only on this phone in the CallRecordings folder, encrypted with a key " +
-                    "kept in Android's secure keystore. Other apps and file managers cannot play them. Nothing is uploaded. " +
-                    "If you uninstall the app the key is deleted and these recordings can no longer be opened. " +
-                    "The accessibility service is used only to detect when calls start and end."
+                body = "Recordings are saved only on this phone and are encrypted, so other apps cannot play them. " +
+                    "Nothing is uploaded. The accessibility service is used only to detect when calls start and end."
             )
         }
     }
@@ -332,111 +317,6 @@ private fun RecorderStoragePage(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun RecorderOptionsPage(onBack: () -> Unit) {
-    val context = LocalContext.current
-    var recordIncoming by remember { mutableStateOf(RecorderPrefs.recordIncoming(context)) }
-    var recordOutgoing by remember { mutableStateOf(RecorderPrefs.recordOutgoing(context)) }
-    var onlyUnknown by remember { mutableStateOf(RecorderPrefs.onlyUnknown(context)) }
-    var audioSource by remember { mutableStateOf(RecorderPrefs.audioSource(context)) }
-
-    RecorderDetailPage(title = "Recording options", onBack = onBack) {
-        RecorderCard {
-            OptionSwitchRow(
-                title = "Record incoming calls",
-                checked = recordIncoming,
-                onChecked = {
-                    recordIncoming = it
-                    RecorderPrefs.setBoolean(context, RecorderPrefs.KEY_RECORD_INCOMING, it)
-                }
-            )
-            OptionSwitchRow(
-                title = "Record outgoing calls",
-                checked = recordOutgoing,
-                onChecked = {
-                    recordOutgoing = it
-                    RecorderPrefs.setBoolean(context, RecorderPrefs.KEY_RECORD_OUTGOING, it)
-                }
-            )
-            OptionSwitchRow(
-                title = "Only keep unknown numbers",
-                subtitle = "Recordings with saved contacts are discarded after the call",
-                checked = onlyUnknown,
-                onChecked = {
-                    onlyUnknown = it
-                    RecorderPrefs.setBoolean(context, RecorderPrefs.KEY_ONLY_UNKNOWN, it)
-                }
-            )
-        }
-
-        RecorderCard {
-            Text(
-                text = "Audio source",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "If the other person sounds too quiet, try a different source.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.66f)
-            )
-            RecorderAudioSource.entries.forEach { source ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            audioSource = source
-                            RecorderPrefs.setAudioSource(context, source)
-                        },
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    RadioButton(
-                        selected = audioSource == source,
-                        onClick = {
-                            audioSource = source
-                            RecorderPrefs.setAudioSource(context, source)
-                        }
-                    )
-                    Column {
-                        Text(source.label, style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            source.description,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.66f)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun OptionSwitchRow(
-    title: String,
-    checked: Boolean,
-    onChecked: (Boolean) -> Unit,
-    subtitle: String? = null
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-            if (subtitle != null) {
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.66f)
-                )
-            }
-        }
-        Switch(checked = checked, onCheckedChange = onChecked)
     }
 }
 

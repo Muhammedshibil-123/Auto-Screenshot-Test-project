@@ -159,13 +159,6 @@ fun PasswordSettingsPage(onBack: () -> Unit) {
                         )
                     }
                 }
-                Text(
-                    text = "Screenshots and recordings are encrypted. A copy of the key, locked with this password, " +
-                        "is kept in the Screenshot and CallRecordings folders. If you uninstall and reinstall the app, " +
-                        "enter the same password to open all your files again.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
-                )
                 if (hasPassword && !hasRecoveryCopy) {
                     Button(onClick = { showSaveRecovery = true }, modifier = Modifier.fillMaxWidth()) {
                         Text("Save recovery copy")
@@ -177,9 +170,7 @@ fun PasswordSettingsPage(onBack: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Text(
-                        text = "There is no way to recover a forgotten password. If you forget it, encrypted " +
-                            "screenshots and recordings cannot be opened after a reinstall or after clearing app data. " +
-                            "Do not delete the hidden .zoro_key files in the Screenshot and CallRecordings folders.",
+                        text = "If you lose your password, everything will be gone.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
                     )
@@ -237,8 +228,7 @@ fun PasswordSettingsPage(onBack: () -> Unit) {
 
         PasswordDialog.Remove -> PasswordPromptDialog(
             title = "Remove password",
-            message = "Enter the current password to remove it. Without a password, encrypted screenshots " +
-                "and recordings can no longer be recovered after uninstalling the app.",
+            message = "Enter the current password to remove it.",
             onDismiss = { dialog = PasswordDialog.None },
             onSubmit = { password ->
                 if (AppLock.verify(context, password)) {
@@ -305,14 +295,7 @@ private fun NewPasswordDialog(
 
 @Composable
 private fun PasswordField(label: String, value: String, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        singleLine = true,
-        label = { Text(label) },
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
-    )
+    PasswordInput(value = value, onValueChange = onChange, label = label)
 }
 
 @Composable

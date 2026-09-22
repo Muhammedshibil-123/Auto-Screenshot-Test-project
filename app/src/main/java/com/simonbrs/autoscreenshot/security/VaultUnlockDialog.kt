@@ -88,19 +88,14 @@ fun VaultUnlockDialog(
                         "password you used before to open them again. New captures and recordings are paused until then.",
                     style = MaterialTheme.typography.bodyMedium
                 )
-                OutlinedTextField(
+                PasswordInput(
                     value = password,
                     onValueChange = {
                         password = it
                         error = null
                     },
-                    singleLine = true,
-                    enabled = !working,
-                    label = { Text("Password") },
-                    isError = error != null,
-                    supportingText = error?.let { message -> { Text(message) } },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                    error = error,
+                    enabled = !working
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(onClick = onSkip, enabled = !working) { Text("Later") }

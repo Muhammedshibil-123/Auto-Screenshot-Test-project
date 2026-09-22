@@ -4,8 +4,13 @@ import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -20,6 +25,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 
 /**
@@ -100,22 +106,13 @@ internal fun PasswordPromptDialog(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
                 )
-                OutlinedTextField(
+                PasswordInput(
                     value = password,
                     onValueChange = {
                         password = it
                         showError = false
                     },
-                    singleLine = true,
-                    label = { Text("Password") },
-                    isError = showError,
-                    supportingText = if (showError) {
-                        { Text("Wrong password") }
-                    } else {
-                        null
-                    },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                    error = if (showError) "Wrong password" else null
                 )
             }
         },
@@ -129,6 +126,37 @@ internal fun PasswordPromptDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+/** Password text field with an eye button to show or hide what is typed. */
+@Composable
+internal fun PasswordInput(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String = "Password",
+    error: String? = null,
+    enabled: Boolean = true
+) {
+    var visible by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        enabled = enabled,
+        label = { Text(label) },
+        isError = error != null,
+        supportingText = error?.let { message -> { Text(message) } },
+        visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        trailingIcon = {
+            IconButton(onClick = { visible = !visible }) {
+                Icon(
+                    imageVector = if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                    contentDescription = if (visible) "Hide password" else "Show password"
+                )
+            }
         }
     )
 }
